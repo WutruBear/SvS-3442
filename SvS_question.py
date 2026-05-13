@@ -525,7 +525,7 @@ df_sorted["_Raw Input"] = [
     for uid in df_sorted["User ID"]
 ]
 
-st.markdown("### 📊 Prep Table")
+st.markdown("### 📊 Results Table")
 
 st.dataframe(
     df_sorted,
