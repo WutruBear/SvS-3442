@@ -465,7 +465,7 @@ Level: FC2
 CONSTRUCTION (Monday): 2d 2h
 RESEARCH (Tuesday): 2d 2m
 TROOPS (Thursday): 2d 2h
-How many FCs and FC shards you have: FC: 2, FC shards: 2  
+How many FCs and FC shards you have: FC: 2, FC shards: test  
 Desired time UTC (minimum 3 hour window): 7utc till 21utc
 Desired day(s): 2, 4
 
