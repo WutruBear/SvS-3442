@@ -171,7 +171,11 @@ def normalize_time_utc(raw):
 
     text = raw.lower().strip()
 
-    nums = [int(n) for n in re.findall(r'\d{1,2}', text)]
+    # Extract only hour values (ignore .00 / :00)
+    nums = [
+        int(m.group(1))
+        for m in re.finditer(r'\b(\d{1,2})(?:[:.]\d{2})?\b', text)
+    ]
 
     if not nums:
         return "", LOW
