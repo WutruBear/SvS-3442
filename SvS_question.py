@@ -338,7 +338,7 @@ RESEARCH (Tuesday):  20
 TROOPS (Thursday): 50
 How many FCs and FC shards you have: FC 2700 shards 400
 Desired time UTC (minimum 3 hour window): 16.00-19.00
-Desired day(s) (1,.2,.4): 1,4
+Desired day(s) (1,.2,.4): Mon, Tue
 
 User ID: 564134590
 Level: FC3
@@ -347,14 +347,14 @@ RESEARCH (Tuesday): 42d
 TROOPS (Thursday): 100d 10h
 How many FCs and FC shards you have: 2.693 FC, 434 FC shards 
 Desired time UTC (minimum 3 hour window): 7utc till 21utc
-Desired day(s): (1 but not enough speedups\U0001f613), 2, 4
+Desired day(s): 2, 4
 
 User ID: 564134596
 Level: FC3
 CONSTRUCTION (Monday): 24 days
 RESEARCH (Tuesday): 42 days
 TROOPS (Thursday): 100 days
-How many FCs and FC shards you have: 2.693 Crystals, 434 shards 
+How many FCs and FC shards you have: 2.693 FCs, 434 FC shards
 Desired time UTC (minimum 3 hour window): 10, 11, 23, 24
 Desired day(s): Monday, Tuesday
 
@@ -363,7 +363,7 @@ Level: FC4
 CONSTRUCTION (Monday): 15d
 RESEARCH (Tuesday): 30d 12h
 TROOPS (Thursday): 80d
-How many FCs and FC shards you have: 26 FC, 434 FCs
+How many FCs and FC shards you have: 26 FC, 434 shards
 Desired time UTC (minimum 3 hour window): 14-17
 Desired day(s): 1, 4
 """
