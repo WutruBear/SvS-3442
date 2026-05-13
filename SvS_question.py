@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 
-st.set_page_config(page_title="FC Data Parser", page_icon="⚔️", layout="wide")
+st.set_page_config(page_title="SvS #3442 tool", page_icon="⚔️", layout="wide")
 
 st.markdown("""
 <style>
@@ -66,9 +66,9 @@ def normalize_duration(raw):
 
     days = 0.0
 
-    day_m = re.search(rf'({NUM})\s*d', raw)
-    hour_m = re.search(rf'({NUM})\s*h', raw)
-    min_m = re.search(rf'({NUM})\s*m', raw)
+    day_m = re.search(rf'({NUM})\s*(?:d|day|days)\b', raw)
+    hour_m = re.search(rf'({NUM})\s*(?:h|hr|hour|hours)\b', raw)
+    min_m = re.search(rf'({NUM})\s*(?:m|min|minute|minutes)\b', raw)
 
     if day_m:
         days += float(day_m.group(1).replace(",", "."))
@@ -115,7 +115,7 @@ def parse_fc_shards(raw):
     shard_patterns = [
         r'shards?\s*(\d+)',
         r'(\d+)\s*(?:fc\s+)?shards?',
-        r'(\d+)\s*fcs\b',  # plural FCs = shards shorthand
+        r'shards:?\s*(\d+)',
     ]
 
     for pat in shard_patterns:
@@ -129,6 +129,8 @@ def parse_fc_shards(raw):
     # ─────────────────────────────────────────────
     fc_patterns = [
         r'fc\s*(\d+(?:[.,]\d+)?)',
+        r'fc:\s*(\d+(?:[.,]\d+)?)',
+        r'fcs:\s*(\d+(?:[.,]\d+)?)',
         r'(\d+(?:[.,]\d+)?)\s*fc\b',
         r'(\d+(?:[.,]\d+)?)\s*crystals?',
     ]
@@ -316,6 +318,7 @@ def parse_input(text):
         if not rec["User ID"]:
             warnings.append(f"Block {i}: Could not find User ID — skipped.")
             continue
+        rec["_raw_block"] = part
         records.append(rec)
     return records, warnings
 
@@ -340,41 +343,41 @@ FIELD_WARN_MSG = {
 }
 
 SAMPLE = """\
-User ID: 574199347
+User ID: 1
 Level: FC5
-CONSTRUCTION (Monday): 35
-RESEARCH (Tuesday):  20
-TROOPS (Thursday): 50
-How many FCs and FC shards you have: FC 2700 shards 400
+CONSTRUCTION (Monday): 1
+RESEARCH (Tuesday):  1
+TROOPS (Thursday): 1
+How many FCs and FC shards you have: FC 1 shards 1
 Desired time UTC (minimum 3 hour window): 16.00-19.00
 Desired day(s) (1,.2,.4): Mon, Tue
 
-User ID: 564134590
+User ID: 2
 Level: FC3
-CONSTRUCTION (Monday): 24d 3h
-RESEARCH (Tuesday): 42d
-TROOPS (Thursday): 100d 10h
-How many FCs and FC shards you have: 2.693 FC, 434 FC shards 
+CONSTRUCTION (Monday): 2d 2h
+RESEARCH (Tuesday): 2d 2m
+TROOPS (Thursday): 2d 2h
+How many FCs and FC shards you have: FC: 2, FC shards: 2  
 Desired time UTC (minimum 3 hour window): 7utc till 21utc
 Desired day(s): 2, 4
 
-User ID: 564134596
+User ID: 3
 Level: FC3
-CONSTRUCTION (Monday): 24 days
-RESEARCH (Tuesday): 42 days
-TROOPS (Thursday): 100 days
-How many FCs and FC shards you have: 2.693 FCs, 434 FC shards
-Desired time UTC (minimum 3 hour window): 10, 11, 23, 24
+CONSTRUCTION (Monday): 3 days
+RESEARCH (Tuesday): 3 day 1 hour
+TROOPS (Thursday): 3 days
+How many FCs and FC shards you have: 3 FCs, 3 FC shards
+Desired time UTC (minimum 3 hour window): 00, 10, 11, 23
 Desired day(s): Monday, Tuesday
 
-User ID: 999000111
+User ID: 4
 Level: FC4
-CONSTRUCTION (Monday): 15d
-RESEARCH (Tuesday): 30d 12h
-TROOPS (Thursday): 80d
-How many FCs and FC shards you have: 26 FC, 434 shards
+CONSTRUCTION (Monday): 4d
+RESEARCH (Tuesday): 4d 4h
+TROOPS (Thursday): 4d
+How many FCs and FC shards you have: 4 FC, 4 shards
 Desired time UTC (minimum 3 hour window): 14-17
-Desired day(s): 1, 4
+Desired day(s): 1, 2, 4
 """
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -383,8 +386,9 @@ Desired day(s): 1, 4
 
 st.markdown("""
 <div class="header-block">
-  <h1>⚔️ FC DATA PARSER</h1>
-  <p>Paste raw player data in any format. Uncertain fields are flagged for manual review.</p>
+  <h1>⚔️ SvS Prep Ministry tool #3442</h1>
+  <p>Paste raw player data.
+  Uncertain fields are flagged for manual review.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -483,23 +487,85 @@ n_flagged = len(uncertain)
 st.markdown(f"""
 <div class="metric-row">
   <div class="metric-card"><div class="val">{len(records)}</div><div class="lbl">Players Parsed</div></div>
-  <div class="metric-card"><div class="val">{df['Level'].nunique()}</div><div class="lbl">Unique Levels</div></div>
   <div class="metric-card"><div class="val">{n_flagged}</div><div class="lbl">Need Review</div></div>
 </div>
 """, unsafe_allow_html=True)
 
+df_sorted["_Raw Input"] = [
+    next(
+        (rec["_raw_block"] for rec in records if rec["User ID"] == uid),
+        ""
+    )
+    for uid in df_sorted["User ID"]
+]
+
 st.markdown("### 📊 Parsed Table")
-st.dataframe(df_sorted, use_container_width=True, hide_index=True, column_config={
-    "User ID":      st.column_config.TextColumn("User ID",          width="medium"),
-    "Level":        st.column_config.TextColumn("Level",            width="small"),
-    "Construction": st.column_config.TextColumn("Construction 🏗",  width="medium"),
-    "Research":     st.column_config.TextColumn("Research 🔬",      width="medium"),
-    "Troops":       st.column_config.TextColumn("Troops ⚔️",       width="medium"),
-    "FCs":          st.column_config.TextColumn("FCs 💎",           width="small"),
-    "FC Shards":    st.column_config.TextColumn("Shards 🔷",        width="small"),
-    "Time UTC":     st.column_config.TextColumn("Time (UTC) 🕐",    width="medium"),
-    "Days":         st.column_config.TextColumn("Days 📅",          width="medium"),
-})
+
+st.dataframe(
+    df_sorted,
+    use_container_width=True,
+    hide_index=True,
+
+    column_config={
+
+        "User ID": st.column_config.TextColumn(
+            "User ID",
+            width="medium",
+        ),
+
+        "Level": st.column_config.TextColumn(
+            "Level",
+            width="small",
+        ),
+
+        "Construction": st.column_config.NumberColumn(
+            "Construction",
+            format="%.2f",
+            width="small",
+        ),
+
+        "Research": st.column_config.NumberColumn(
+            "Research",
+            format="%.2f",
+            width="small",
+        ),
+
+        "Troops": st.column_config.NumberColumn(
+            "Troops",
+            format="%.2f",
+            width="small",
+        ),
+
+        "FCs": st.column_config.NumberColumn(
+            "FCs",
+            format="%d",
+            width="small",
+        ),
+
+        "FC Shards": st.column_config.NumberColumn(
+            "Shards",
+            format="%d",
+            width="small",
+        ),
+
+        "Time UTC": st.column_config.TextColumn(
+            "Time (UTC)",
+            width="medium",
+        ),
+
+        "Days": st.column_config.TextColumn(
+            "Days",
+            width="small",
+        ),
+
+        "_Raw Input": st.column_config.TextColumn(
+            "Original Input",
+            help="Hover cells to see original raw player input",
+            width="medium",
+        ),
+    }
+)
+
 
 if export_csv:
     st.download_button("Click to download", df_sorted.to_csv(index=False).encode("utf-8"),
