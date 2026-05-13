@@ -139,10 +139,13 @@ def normalize_days(raw):
     if not raw:
         return "", LOW
     day_map = {
-        "1":"Mon","monday":"Mon","2":"Tue","tuesday":"Tue",
-        "3":"Wed","wednesday":"Wed","4":"Thu","thursday":"Thu",
-        "5":"Fri","friday":"Fri","6":"Sat","saturday":"Sat",
-        "7":"Sun","sunday":"Sun",
+        "Mon":"1","monday":"1",
+        "Tue":"2","tuesday":"2",
+        "Wed":"3","wednesday":"3",
+        "Thu":"4","thursday":"4",
+        "Fri":"5","friday":"5",
+        "Sat":"6","saturday":"6",
+        "Sun":"7","sunday":"7",
     }
     tokens = re.split(r'[\s,;/]+', raw.lower())
     seen, result = set(), []
