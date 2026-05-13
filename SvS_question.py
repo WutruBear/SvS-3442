@@ -691,15 +691,15 @@ with st.expander("➕ Add player manually"):
         with c1:
             m_uid    = st.text_input("User ID *",     placeholder="e.g. 99999")
             m_level  = st.text_input("Level",         placeholder="e.g. FC3")
-            m_fcs    = st.text_input("FCs",           placeholder="e.g. 2700")
-        with c2:
             m_constr = st.text_input("Construction",  placeholder="e.g. 24d 3h")
+        with c2:           
             m_res    = st.text_input("Research",      placeholder="e.g. 42d")
-            m_shards = st.text_input("FC Shards",     placeholder="e.g. 434")
-        with c3:
             m_troops = st.text_input("Troops",        placeholder="e.g. 5d")
+            m_fcs    = st.text_input("FCs",           placeholder="e.g. 2700") 
+        with c3:
+            m_shards = st.text_input("FC Shards",     placeholder="e.g. 434")
             m_time   = st.text_input("Time UTC",      placeholder="e.g. 14-17")
-            m_days   = st.text_input("Days",          placeholder="e.g. Mon, Thu")
+            m_days   = st.text_input("Days",          placeholder="e.g. 1, 2")
 
         submitted = st.form_submit_button("Add Player", use_container_width=True)
 
