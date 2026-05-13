@@ -160,12 +160,14 @@ def parse_fc_shards(raw):
 
 def normalize_time_utc(raw):
     """
-    Convert time ranges into expanded hour lists.
+    Convert mixed UTC time expressions into expanded hour lists.
 
     Examples:
         12-14 -> 12,13,14
         16.00-19.00 -> 16,17,18,19
         7utc till 21utc -> 7,8,...,21
+        00utc - 4utc, 9utc, 20-23
+            -> 0,1,2,3,4,9,20,21,22,23
     """
 
     if not raw:
@@ -173,24 +175,23 @@ def normalize_time_utc(raw):
 
     text = raw.lower().strip()
 
-    # Extract hours while ignoring :00 / .00
-    nums = []
+    # Normalize wording
+    text = text.replace("till", "-")
+    text = text.replace("to", "-")
 
-    for m in re.finditer(r'(\d{1,2})(?:[:.](\d{2}))?', text):
-        hour = int(m.group(1))
+    hours = set()
 
-        # Ignore minute-only captures like the second "00"
-        if 0 <= hour <= 23:
-            nums.append(hour)
+    # ─────────────────────────────────────────────
+    # FIND RANGES FIRST
+    # ─────────────────────────────────────────────
+    range_pattern = r'(\d{1,2})(?:[:.]\d{2})?\s*(?:utc)?\s*-\s*(\d{1,2})(?:[:.]\d{2})?\s*(?:utc)?'
 
-    if not nums:
-        return "", LOW
+    for m in re.finditer(range_pattern, text):
+        start = int(m.group(1))
+        end = int(m.group(2))
 
-    # Detect ranges
-    if any(x in text for x in ["-", "till", "to"]):
-
-        start = nums[0]
-        end = nums[1] if len(nums) > 1 else nums[0]
+        if not (0 <= start <= 23 and 0 <= end <= 23):
+            continue
 
         # Overnight range
         if start > end:
@@ -198,10 +199,27 @@ def normalize_time_utc(raw):
         else:
             expanded = list(range(start, end + 1))
 
-        return ",".join(map(str, expanded)), HIGH
+        hours.update(expanded)
 
-    # Explicit list of hours
-    cleaned = sorted(set(nums))
+    # Remove ranges from text so standalone hours
+    # don't duplicate incorrectly
+    text_no_ranges = re.sub(range_pattern, " ", text)
+
+    # ─────────────────────────────────────────────
+    # FIND STANDALONE HOURS
+    # ─────────────────────────────────────────────
+    single_pattern = r'\b(\d{1,2})(?:[:.]\d{2})?\s*(?:utc)?\b'
+
+    for m in re.finditer(single_pattern, text_no_ranges):
+        hour = int(m.group(1))
+
+        if 0 <= hour <= 23:
+            hours.add(hour)
+
+    if not hours:
+        return "", LOW
+
+    cleaned = sorted(hours)
 
     return ",".join(map(str, cleaned)), HIGH
 
@@ -344,7 +362,7 @@ FIELD_WARN_MSG = {
 
 SAMPLE = """\
 User ID: 1
-Level: FC5
+Level: FC1
 CONSTRUCTION (Monday): 1
 RESEARCH (Tuesday):  1
 TROOPS (Thursday): 1
@@ -353,7 +371,7 @@ Desired time UTC (minimum 3 hour window): 16.00-19.00
 Desired day(s) (1,.2,.4): Mon, Tue
 
 User ID: 2
-Level: FC3
+Level: FC2
 CONSTRUCTION (Monday): 2d 2h
 RESEARCH (Tuesday): 2d 2m
 TROOPS (Thursday): 2d 2h
@@ -378,6 +396,15 @@ TROOPS (Thursday): 4d
 How many FCs and FC shards you have: 4 FC, 4 shards
 Desired time UTC (minimum 3 hour window): 14-17
 Desired day(s): 1, 2, 4
+
+User ID: 5
+Level: FC5
+CONSTRUCTION (Monday): 7200min
+RESEARCH (Tuesday): 5 days, 5 hours
+TROOPS (Thursday): 5
+How many FCs and FC shards you have: 5 Crystals, 5 shards
+Desired time UTC (minimum 3 hour window): 00utc - 4utc, 9utc, 20-23
+Desired day(s): Mon, Thu
 """
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -398,7 +425,6 @@ with col_opts:
     st.markdown("### ⚙️ Options")
     show_empty = st.checkbox("Show empty fields as —", value=True)
     sort_col   = st.selectbox("Sort by", DISPLAY_FIELDS)
-    export_csv = st.button("⬇ Download CSV")
 
 with col_input:
     st.markdown("### 📋 Raw Input")
@@ -486,7 +512,7 @@ except Exception:
 n_flagged = len(uncertain)
 st.markdown(f"""
 <div class="metric-row">
-  <div class="metric-card"><div class="val">{len(records)}</div><div class="lbl">Players Parsed</div></div>
+  <div class="metric-card"><div class="val">{len(records)}</div><div class="lbl">Players included</div></div>
   <div class="metric-card"><div class="val">{n_flagged}</div><div class="lbl">Need Review</div></div>
 </div>
 """, unsafe_allow_html=True)
@@ -499,7 +525,7 @@ df_sorted["_Raw Input"] = [
     for uid in df_sorted["User ID"]
 ]
 
-st.markdown("### 📊 Parsed Table")
+st.markdown("### 📊 Prep Table")
 
 st.dataframe(
     df_sorted,
@@ -566,10 +592,29 @@ st.dataframe(
     }
 )
 
+from datetime import datetime
 
-if export_csv:
-    st.download_button("Click to download", df_sorted.to_csv(index=False).encode("utf-8"),
-                       "fc_data.csv", "text/csv")
+st.markdown("### 💾 Export")
+
+# Default filename with timestamp
+now = datetime.utcnow().strftime("%Y%m%d_%H%M")
+default_name = f"svs_3442_export_{now}.csv"
+
+file_name = st.text_input(
+    "Filename",
+    value=default_name,
+    help="Choose the exported CSV filename"
+)
+
+csv_data = df_sorted.to_csv(index=False).encode("utf-8")
+
+st.download_button(
+    label="⬇ Save CSV",
+    data=csv_data,
+    file_name=file_name,
+    mime="text/csv",
+    use_container_width=True,
+)
 
 with st.expander("🔍 Raw parsed records (JSON)"):
     st.json(records)
