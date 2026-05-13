@@ -615,6 +615,3 @@ st.download_button(
     mime="text/csv",
     use_container_width=True,
 )
-
-with st.expander("🔍 Raw parsed records (JSON)"):
-    st.json(records)
