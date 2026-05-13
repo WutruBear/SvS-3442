@@ -85,7 +85,7 @@ def normalize_duration(raw):
     # fallback: plain number means days
     num_m = re.search(rf'({NUM})', raw)
     if num_m:
-        return float(num_m.group(1).replace(",", ".")), MEDIUM
+        return float(num_m.group(1).replace(",", ".")), HIGH
 
     return "", LOW
 
