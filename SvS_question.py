@@ -171,32 +171,37 @@ def normalize_time_utc(raw):
 
     text = raw.lower().strip()
 
-    # Extract only hour values (ignore .00 / :00)
-    nums = [
-        int(m.group(1))
-        for m in re.finditer(r'\b(\d{1,2})(?:[:.]\d{2})?\b', text)
-    ]
+    # Extract hours while ignoring :00 / .00
+    nums = []
+
+    for m in re.finditer(r'(\d{1,2})(?:[:.](\d{2}))?', text):
+        hour = int(m.group(1))
+
+        # Ignore minute-only captures like the second "00"
+        if 0 <= hour <= 23:
+            nums.append(hour)
 
     if not nums:
         return "", LOW
 
-    # Range handling
-    if len(nums) >= 2 and (
-        "-" in text or
-        "till" in text or
-        "to" in text
-    ):
-        start, end = nums[0], nums[1]
+    # Detect ranges
+    if any(x in text for x in ["-", "till", "to"]):
 
-        if start <= end:
-            expanded = list(range(start, end + 1))
+        start = nums[0]
+        end = nums[1] if len(nums) > 1 else nums[0]
+
+        # Overnight range
+        if start > end:
+            expanded = list(range(start, 24)) + list(range(0, end + 1))
         else:
-            expanded = list(range(start, 25)) + list(range(0, end + 1))
+            expanded = list(range(start, end + 1))
 
         return ",".join(map(str, expanded)), HIGH
 
-    # Multiple explicit hours
-    return ",".join(map(str, sorted(set(nums)))), HIGH
+    # Explicit list of hours
+    cleaned = sorted(set(nums))
+
+    return ",".join(map(str, cleaned)), HIGH
 
 
 def normalize_days(raw):
