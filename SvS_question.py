@@ -50,116 +50,182 @@ HIGH, MEDIUM, LOW = "high", "medium", "low"
 
 
 def normalize_duration(raw):
+    """
+    Convert durations to float days.
+
+    Examples:
+        30d -> 30
+        24d 12h -> 24.5
+        12h -> 0.5
+        90m -> 0.0625
+    """
     if not raw:
         return "", LOW
-    raw = raw.strip()
-    days_m  = re.search(rf'({NUM})\s*d(?:ay(?:s)?)?(?!\w)', raw, re.I)
-    hours_m = re.search(rf'({NUM})\s*h(?:our(?:s)?)?(?!\w)', raw, re.I)
-    mins_m  = re.search(rf'({NUM})\s*m(?:in(?:ute(?:s)?)?)?(?!\w)', raw, re.I)
-    parts = []
-    if days_m:  parts.append(f"{days_m.group(1)}d")
-    if hours_m: parts.append(f"{hours_m.group(1)}h")
-    if mins_m:  parts.append(f"{mins_m.group(1)}m")
-    if parts:
-        return " ".join(parts), HIGH
+
+    raw = raw.strip().lower()
+
+    days = 0.0
+
+    day_m = re.search(rf'({NUM})\s*d', raw)
+    hour_m = re.search(rf'({NUM})\s*h', raw)
+    min_m = re.search(rf'({NUM})\s*m', raw)
+
+    if day_m:
+        days += float(day_m.group(1).replace(",", "."))
+
+    if hour_m:
+        days += float(hour_m.group(1).replace(",", ".")) / 24
+
+    if min_m:
+        days += float(min_m.group(1).replace(",", ".")) / 1440
+
+    if days > 0:
+        return round(days, 2), HIGH
+
+    # fallback: plain number means days
     num_m = re.search(rf'({NUM})', raw)
     if num_m:
-        return num_m.group(1), MEDIUM   # no unit — flag for review
-    return raw, LOW
+        return float(num_m.group(1).replace(",", ".")), MEDIUM
+
+    return "", LOW
 
 
 def parse_fc_shards(raw):
     """
-    Robust FC + shard parser. Handles:
-      'FC 2700 shards 400'         -> 2700, 400
-      '2.693 FC, 434 FC shards'    -> 2.693, 434
-      '2.693 Crystals, 434 shards' -> 2.693, 434
-      '26 FC, 434 FCs'             -> 26, 434
-      '2 FC 400 shards'            -> 2, 400
-    Returns (fc_val, fc_conf, shard_val, shard_conf)
+    Parse FCs and FC shards as integers.
     """
+
     if not raw:
         return "", LOW, "", LOW
+
     text = raw.strip()
 
-    candidates = []  # (tag, numeric_value, position, kind)
+    fc_val = None
+    shard_val = None
 
-    # ── Explicit shard keywords ────────────────────────────────────────────────
-    shard_kw = r'(?:FC\s+)?shard(?:s)?'
-    for m in re.finditer(rf'({NUM})\s*(?:{shard_kw})', text, re.I):
-        candidates.append(('shard', float(m.group(1).replace(',','.')), m.start(), 'explicit'))
-    for m in re.finditer(rf'(?:{shard_kw})\s*({NUM})', text, re.I):
-        candidates.append(('shard', float(m.group(1).replace(',','.')), m.start(), 'explicit'))
+    # FC values
+    fc_patterns = [
+        r'(\d+(?:[.,]\d+)?)\s*(?:FC|Crystal)',
+        r'(?:FC|Crystal)\s*(\d+(?:[.,]\d+)?)',
+    ]
 
-    # ── 'FCs' (plural, no 'shard' keyword) — casual shorthand for FC shards ───
-    for m in re.finditer(rf'({NUM})\s*FCs\b', text, re.I):
-        candidates.append(('shard', float(m.group(1).replace(',','.')), m.start(), 'plural'))
-    for m in re.finditer(rf'\bFCs\s+({NUM})', text, re.I):
-        candidates.append(('shard', float(m.group(1).replace(',','.')), m.start(), 'plural'))
+    for pat in fc_patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            val = m.group(1)
 
-    # ── Explicit FC keywords (singular FC or Crystal, NOT 'FC shard' / 'FCs') ──
-    # Negative lookahead: FC not followed by 's' or ' shard'
-    fc_kw = r'(?:Crystal(?:s)?|FC(?!s\b)(?!\s+shard(?:s)?\b))'
-    for m in re.finditer(rf'({NUM})\s*(?:{fc_kw})\b', text, re.I):
-        candidates.append(('fc', float(m.group(1).replace(',','.')), m.start(), 'explicit'))
-    for m in re.finditer(rf'\b(?:{fc_kw})\s*({NUM})', text, re.I):
-        candidates.append(('fc', float(m.group(1).replace(',','.')), m.start(), 'explicit'))
+            # Handle 2.693 => 2693
+            if "." in val and len(val.split(".")[-1]) == 3:
+                val = val.replace(".", "")
+            elif "," in val and len(val.split(",")[-1]) == 3:
+                val = val.replace(",", "")
+            else:
+                val = float(val.replace(",", "."))
 
-    def best(tag):
-        pool = [(v, pos, kind) for (t, v, pos, kind) in candidates if t == tag]
-        if not pool:
-            return None, LOW
-        explicit = [(v, pos, k) for (v, pos, k) in pool if k == 'explicit']
-        chosen = sorted(explicit if explicit else pool, key=lambda x: x[1])
-        return chosen[0][0], (HIGH if explicit else MEDIUM)
+            fc_val = int(val)
+            break
 
-    fc_raw, fc_conf = best('fc')
-    shard_raw, shard_conf = best('shard')
+    # Shards
+    shard_patterns = [
+        r'(\d+)\s*(?:FC\s+)?shards?',
+        r'(?:FC\s+)?shards?\s*(\d+)',
+        r'(\d+)\s*FCs\b',
+    ]
 
-    # Fallback: two bare numbers, no keywords at all
-    all_nums = re.findall(rf'({NUM})', text)
-    if len(all_nums) == 2 and fc_raw is None and shard_raw is None:
-        return all_nums[0], LOW, all_nums[1], LOW
+    for pat in shard_patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            shard_val = int(m.group(1))
+            break
 
-    def fmt(v):
-        if v is None:
-            return ""
-        return str(int(v)) if v == int(v) else str(v)
+    return (
+        fc_val if fc_val is not None else "",
+        HIGH if fc_val is not None else LOW,
+        shard_val if shard_val is not None else "",
+        HIGH if shard_val is not None else LOW,
+    )
 
-    fc_str, shard_str = fmt(fc_raw), fmt(shard_raw)
+def normalize_time_utc(raw):
+    """
+    Convert time ranges into expanded hour lists.
 
-    # Sanity check: same value for both = something went wrong
-    if fc_str and shard_str and fc_str == shard_str:
-        return fc_str, LOW, shard_str, LOW
+    Examples:
+        12-14 -> 12,13,14
+        16.00-19.00 -> 16,17,18,19
+        7utc till 21utc -> 7,8,...,21
+    """
 
-    return fc_str, fc_conf, shard_str, shard_conf
+    if not raw:
+        return "", LOW
+
+    text = raw.lower().strip()
+
+    nums = [int(n) for n in re.findall(r'\d{1,2}', text)]
+
+    if not nums:
+        return "", LOW
+
+    # Range handling
+    if len(nums) >= 2 and (
+        "-" in text or
+        "till" in text or
+        "to" in text
+    ):
+        start, end = nums[0], nums[1]
+
+        if start <= end:
+            expanded = list(range(start, end + 1))
+        else:
+            expanded = list(range(start, 25)) + list(range(0, end + 1))
+
+        return ",".join(map(str, expanded)), HIGH
+
+    # Multiple explicit hours
+    return ",".join(map(str, sorted(set(nums)))), HIGH
 
 
 def normalize_days(raw):
+    """
+    Convert days into numbers.
+
+    Monday -> 1
+    Tuesday -> 2
+    ...
+    Sunday -> 7
+    """
+
     if not raw:
         return "", LOW
+
+    text = raw.lower()
+
     day_map = {
-        "Mon":"1","monday":"1",
-        "Tue":"2","tuesday":"2",
-        "Wed":"3","wednesday":"3",
-        "Thu":"4","thursday":"4",
-        "Fri":"5","friday":"5",
-        "Sat":"6","saturday":"6",
-        "Sun":"7","sunday":"7",
+        "mon": "1", "monday": "1",
+        "tue": "2", "tuesday": "2",
+        "wed": "3", "wednesday": "3",
+        "thu": "4", "thursday": "4",
+        "fri": "5", "friday": "5",
+        "sat": "6", "saturday": "6",
+        "sun": "7", "sunday": "7",
     }
-    tokens = re.split(r'[\s,;/]+', raw.lower())
-    seen, result = set(), []
-    for t in tokens:
-        t = t.strip("().")
-        if re.match(r'^[a-z]+$', t) and t not in day_map:
-            continue
-        mapped = day_map.get(t)
-        if mapped and mapped not in seen:
-            result.append(mapped)
-            seen.add(mapped)
-    if result:
-        return ", ".join(result), HIGH
-    return raw.strip(), LOW
+
+    found = []
+
+    # explicit numbers
+    nums = re.findall(r'\b([1-7])\b', text)
+    found.extend(nums)
+
+    # text days
+    for k, v in day_map.items():
+        if re.search(rf'\b{k}\b', text):
+            found.append(v)
+
+    found = sorted(set(found), key=int)
+
+    if found:
+        return ",".join(found), HIGH
+
+    return "", LOW
 
 
 def extract_field(block, patterns):
@@ -201,12 +267,16 @@ def parse_block(block):
     r["FCs"] = fc_v;         r["_conf_FCs"] = fc_c
     r["FC Shards"] = sh_v;   r["_conf_FC Shards"] = sh_c
 
-    r["Time UTC"] = extract_field(block, [
-        r'Desired\s+time\s+UTC[^:\n]*[:\-]?\s*([^\n]+)',
-        r'Time\s+UTC[^:\n]*[:\-]?\s*([^\n]+)',
-        r'UTC\s*[:\-]\s*([^\n]+)',
+    raw_time = extract_field(block, [
+    r'Desired\s+time\s+UTC[^:\n]*[:\-]?\s*([^\n]+)',
+    r'Time\s+UTC[^:\n]*[:\-]?\s*([^\n]+)',
+    r'UTC\s*[:\-]\s*([^\n]+)',
     ]).strip()
-    r["_conf_Time UTC"] = HIGH if r["Time UTC"] else LOW
+
+    tv, tc = normalize_time_utc(raw_time)
+
+    r["Time UTC"] = tv
+    r["_conf_Time UTC"] = tc
 
     raw_days = extract_field(block, [
         r'Desired\s+day[s]?\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
