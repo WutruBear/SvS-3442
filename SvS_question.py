@@ -290,8 +290,8 @@ def parse_block(block):
     r["_conf_Time UTC"] = tc
 
     raw_days = extract_field(block, [
-        r'Desired\s+day[s]?\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
-        r'Day[s]?\s*[:\-]?\s*([^\n]+)',
+        r'Desired\s+day(?:\(s\))?\s*(?:\([^)]*\))?\s*[:\-]\s*([^\n]+)',
+        r'Day(?:s)?\s*(?:\([^)]*\))?\s*[:\-]\s*([^\n]+)',
     ])
     dv, dc = normalize_days(raw_days)
     r["Days"] = dv; r["_conf_Days"] = dc
