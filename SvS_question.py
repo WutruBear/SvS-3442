@@ -465,7 +465,7 @@ Level: FC2
 CONSTRUCTION (Monday): 2d 2h
 RESEARCH (Tuesday): 2d 2m
 TROOPS (Thursday): 2d 2h
-How many FCs and FC shards you have: FC: 2, FC shards: test  
+How many FCs and FC shards you have: FC: 2, FC shards: 2  
 Desired time UTC (minimum 3 hour window): 7utc till 21utc
 Desired day(s): 2, 4
 
@@ -511,16 +511,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-col_input, col_opts = st.columns([3, 1])
-
-with col_opts:
-    st.markdown('<div class="section-label">Options</div>', unsafe_allow_html=True)
-    show_empty = st.checkbox("Show empty fields as —", value=True)
-    sort_col   = st.selectbox("Sort by", DISPLAY_FIELDS)
-
-with col_input:
-    st.markdown('<div class="section-label">Raw Input</div>', unsafe_allow_html=True)
-    raw_text = st.text_area("raw", value=SAMPLE, height=340, label_visibility="collapsed")
+st.markdown('<div class="section-label">Raw Input</div>', unsafe_allow_html=True)
+raw_text = st.text_area("raw", value=SAMPLE, height=340, label_visibility="collapsed")
 
 if not raw_text.strip():
     st.info("Paste your player data in the text box above.")
@@ -607,14 +599,8 @@ for rec in records:
     final.append(row)
 
 df = pd.DataFrame(final, columns=DISPLAY_FIELDS)
-if show_empty:
-    df = df.replace("", "—")
-
-try:
-    df_sorted = df.sort_values(sort_col, ascending=True,
-                               key=lambda s: s.str.lower() if s.dtype == object else s)
-except Exception:
-    df_sorted = df
+df = df.replace("", "—")
+df_sorted = df
 
 df_sorted["_Raw Input"] = [
     next((rec["_raw_block"] for rec in records if rec["User ID"] == uid), "")
