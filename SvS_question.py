@@ -551,7 +551,7 @@ with col_tools:
         st.rerun()
 
     st.download_button(
-        "💾 Save input as .txt",
+        "💾 Save raw input as .txt",
         data=st.session_state["raw_input"].encode("utf-8"),
         file_name="svs_input.txt",
         mime="text/plain",
