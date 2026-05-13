@@ -92,21 +92,45 @@ def normalize_duration(raw):
 
 def parse_fc_shards(raw):
     """
-    Parse FCs and FC shards as integers.
+    Parse FCs + shards as integers.
+
+    Examples:
+        FC 2700 shards 400
+        2700 FC, 400 FC shards
+        2.693 FC, 434 shards
+        26 FC, 434 FCs
     """
 
     if not raw:
         return "", LOW, "", LOW
 
-    text = raw.strip()
+    text = raw.strip().lower()
 
     fc_val = None
     shard_val = None
 
-    # FC values
+    # ─────────────────────────────────────────────
+    # SHARDS FIRST (more specific)
+    # ─────────────────────────────────────────────
+    shard_patterns = [
+        r'shards?\s*(\d+)',
+        r'(\d+)\s*(?:fc\s+)?shards?',
+        r'(\d+)\s*fcs\b',  # plural FCs = shards shorthand
+    ]
+
+    for pat in shard_patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            shard_val = int(m.group(1))
+            break
+
+    # ─────────────────────────────────────────────
+    # FCs
+    # ─────────────────────────────────────────────
     fc_patterns = [
-        r'(\d+(?:[.,]\d+)?)\s*(?:FC|Crystal)',
-        r'(?:FC|Crystal)\s*(\d+(?:[.,]\d+)?)',
+        r'fc\s*(\d+(?:[.,]\d+)?)',
+        r'(\d+(?:[.,]\d+)?)\s*fc\b',
+        r'(\d+(?:[.,]\d+)?)\s*crystals?',
     ]
 
     for pat in fc_patterns:
@@ -114,7 +138,7 @@ def parse_fc_shards(raw):
         if m:
             val = m.group(1)
 
-            # Handle 2.693 => 2693
+            # 2.693 -> 2693
             if "." in val and len(val.split(".")[-1]) == 3:
                 val = val.replace(".", "")
             elif "," in val and len(val.split(",")[-1]) == 3:
@@ -123,19 +147,6 @@ def parse_fc_shards(raw):
                 val = float(val.replace(",", "."))
 
             fc_val = int(val)
-            break
-
-    # Shards
-    shard_patterns = [
-        r'(\d+)\s*(?:FC\s+)?shards?',
-        r'(?:FC\s+)?shards?\s*(\d+)',
-        r'(\d+)\s*FCs\b',
-    ]
-
-    for pat in shard_patterns:
-        m = re.search(pat, text, re.I)
-        if m:
-            shard_val = int(m.group(1))
             break
 
     return (
