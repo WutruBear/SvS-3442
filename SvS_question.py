@@ -2,175 +2,164 @@ import streamlit as st
 import pandas as pd
 import re
 
-# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="FC Data Parser", page_icon="⚔️", layout="wide")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Share+Tech+Mono&display=swap');
-
     html, body, [class*="css"] { font-family: 'Rajdhani', sans-serif; }
-
     .stApp { background: #0d0f1a; color: #e0e6f0; }
-
     h1, h2, h3 { font-family: 'Rajdhani', sans-serif; font-weight: 700; color: #7eb8f7; letter-spacing: 2px; }
-
     .header-block {
         background: linear-gradient(135deg, #111827 0%, #1a2340 100%);
-        border: 1px solid #2a3a5c;
-        border-left: 4px solid #4a9eff;
-        border-radius: 8px;
-        padding: 1.5rem 2rem;
-        margin-bottom: 2rem;
+        border: 1px solid #2a3a5c; border-left: 4px solid #4a9eff;
+        border-radius: 8px; padding: 1.5rem 2rem; margin-bottom: 2rem;
     }
-
     .header-block h1 { margin: 0; font-size: 2.2rem; }
     .header-block p  { margin: 0.3rem 0 0; color: #7a90b8; font-size: 1rem; }
-
     textarea { font-family: 'Share Tech Mono', monospace !important; font-size: 0.82rem !important;
                background: #111827 !important; color: #a8c8ff !important;
                border: 1px solid #2a3a5c !important; border-radius: 6px !important; }
-
-    .stDataFrame { border: 1px solid #2a3a5c; border-radius: 8px; overflow: hidden; }
-
     .metric-row { display: flex; gap: 1rem; margin-bottom: 1.5rem; }
-    .metric-card {
-        flex: 1;
-        background: #111827;
-        border: 1px solid #2a3a5c;
-        border-radius: 8px;
-        padding: 1rem 1.5rem;
-        text-align: center;
-    }
+    .metric-card { flex: 1; background: #111827; border: 1px solid #2a3a5c;
+                   border-radius: 8px; padding: 1rem 1.5rem; text-align: center; }
     .metric-card .val { font-size: 2rem; font-weight: 700; color: #4a9eff; }
     .metric-card .lbl { font-size: 0.85rem; color: #7a90b8; text-transform: uppercase; letter-spacing: 1px; }
-
     .stButton > button {
-        background: linear-gradient(135deg, #1e3a6e, #2a5298);
-        color: #fff;
-        border: 1px solid #4a9eff;
-        border-radius: 6px;
-        font-family: 'Rajdhani', sans-serif;
-        font-weight: 600;
-        font-size: 1rem;
-        letter-spacing: 1px;
-        padding: 0.5rem 2rem;
-        transition: all 0.2s;
+        background: linear-gradient(135deg, #1e3a6e, #2a5298); color: #fff;
+        border: 1px solid #4a9eff; border-radius: 6px;
+        font-family: 'Rajdhani', sans-serif; font-weight: 600;
+        font-size: 1rem; letter-spacing: 1px; padding: 0.5rem 2rem;
     }
-    .stButton > button:hover { background: linear-gradient(135deg, #2a5298, #3a6bc8); }
-
-    .parse-error { background: #2a1a1a; border: 1px solid #7a3030;
-                   border-radius: 6px; padding: 0.8rem 1.2rem; margin: 0.4rem 0;
-                   color: #f08080; font-size: 0.9rem; }
-    .parse-ok    { background: #0d2a1a; border: 1px solid #2a6040;
-                   border-radius: 6px; padding: 0.4rem 1rem; margin: 0.2rem 0;
-                   color: #60c090; font-size: 0.88rem; }
-
-    .stSelectbox div[data-baseweb="select"] { background: #111827 !important; border-color: #2a3a5c !important; }
-    .stCheckbox { color: #a8c8ff; }
+    .verify-banner {
+        background: #1a1a0d; border: 1px solid #7a6020; border-left: 4px solid #f0b040;
+        border-radius: 8px; padding: 0.8rem 1.2rem; margin: 0.6rem 0; color: #f0d080;
+    }
+    .field-warn { color: #f0b040; font-size: 0.82rem; margin-top: -0.5rem; margin-bottom: 0.5rem; }
     label { color: #a8c8ff !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Parser helpers ─────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# PARSING ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def normalize_duration(raw: str) -> str:
-    """Normalize duration strings like '24d 3h', '24 days', '42d', '35', '100d 10h' → uniform label."""
+NUM = r'\d+(?:[.,]\d+)?'
+HIGH, MEDIUM, LOW = "high", "medium", "low"
+
+
+def normalize_duration(raw):
     if not raw:
-        return ""
+        return "", LOW
     raw = raw.strip()
-    # already looks like a number (hours in game, maybe)
-    days_match  = re.search(r'(\d+(?:\.\d+)?)\s*d(?:ay(?:s)?)?', raw, re.I)
-    hours_match = re.search(r'(\d+(?:\.\d+)?)\s*h(?:our(?:s)?)?', raw, re.I)
-    mins_match  = re.search(r'(\d+(?:\.\d+)?)\s*m(?:in(?:ute(?:s)?)?)?', raw, re.I)
-
+    days_m  = re.search(rf'({NUM})\s*d(?:ay(?:s)?)?(?!\w)', raw, re.I)
+    hours_m = re.search(rf'({NUM})\s*h(?:our(?:s)?)?(?!\w)', raw, re.I)
+    mins_m  = re.search(rf'({NUM})\s*m(?:in(?:ute(?:s)?)?)?(?!\w)', raw, re.I)
     parts = []
-    if days_match:  parts.append(f"{days_match.group(1)}d")
-    if hours_match: parts.append(f"{hours_match.group(1)}h")
-    if mins_match:  parts.append(f"{mins_match.group(1)}m")
-
+    if days_m:  parts.append(f"{days_m.group(1)}d")
+    if hours_m: parts.append(f"{hours_m.group(1)}h")
+    if mins_m:  parts.append(f"{mins_m.group(1)}m")
     if parts:
-        return " ".join(parts)
+        return " ".join(parts), HIGH
+    num_m = re.search(rf'({NUM})', raw)
+    if num_m:
+        return num_m.group(1), MEDIUM   # no unit — flag for review
+    return raw, LOW
 
-    # plain number — return as-is (probably speedup count)
-    num_match = re.search(r'(\d+(?:\.\d+)?)', raw)
-    return num_match.group(1) if num_match else raw
 
-
-def parse_fc_shards(raw: str):
+def parse_fc_shards(raw):
     """
-    Handle many FC/crystal/shard formats:
-      'FC 2700 shards 400'
-      '2.693 FC, 434 FC shards'
-      '2.693 Crystals, 434 shards'
-      'FC 2 shards 400'
-    Returns (fc_str, shards_str)
+    Robust FC + shard parser. Handles:
+      'FC 2700 shards 400'         -> 2700, 400
+      '2.693 FC, 434 FC shards'    -> 2.693, 434
+      '2.693 Crystals, 434 shards' -> 2.693, 434
+      '26 FC, 434 FCs'             -> 26, 434
+      '2 FC 400 shards'            -> 2, 400
+    Returns (fc_val, fc_conf, shard_val, shard_conf)
     """
     if not raw:
-        return "", ""
+        return "", LOW, "", LOW
+    text = raw.strip()
 
-    raw = raw.strip()
+    candidates = []  # (tag, numeric_value, position, kind)
 
-    # Normalise separator
-    text = raw.replace(",", " ").replace(";", " ")
+    # ── Explicit shard keywords ────────────────────────────────────────────────
+    shard_kw = r'(?:FC\s+)?shard(?:s)?'
+    for m in re.finditer(rf'({NUM})\s*(?:{shard_kw})', text, re.I):
+        candidates.append(('shard', float(m.group(1).replace(',','.')), m.start(), 'explicit'))
+    for m in re.finditer(rf'(?:{shard_kw})\s*({NUM})', text, re.I):
+        candidates.append(('shard', float(m.group(1).replace(',','.')), m.start(), 'explicit'))
 
-    # Look for FC count — number before or after 'FC' or 'Crystal(s)'
-    fc_val = ""
-    shard_val = ""
+    # ── 'FCs' (plural, no 'shard' keyword) — casual shorthand for FC shards ───
+    for m in re.finditer(rf'({NUM})\s*FCs\b', text, re.I):
+        candidates.append(('shard', float(m.group(1).replace(',','.')), m.start(), 'plural'))
+    for m in re.finditer(rf'\bFCs\s+({NUM})', text, re.I):
+        candidates.append(('shard', float(m.group(1).replace(',','.')), m.start(), 'plural'))
 
-    fc_pattern     = re.search(r'(\d+(?:[.,]\d+)?)\s*(?:FC|Crystal(?:s)?)\b', text, re.I)
-    fc_pattern_rev = re.search(r'\bFC\s+(\d+(?:[.,]\d+)?)', text, re.I)
+    # ── Explicit FC keywords (singular FC or Crystal, NOT 'FC shard' / 'FCs') ──
+    # Negative lookahead: FC not followed by 's' or ' shard'
+    fc_kw = r'(?:Crystal(?:s)?|FC(?!s\b)(?!\s+shard(?:s)?\b))'
+    for m in re.finditer(rf'({NUM})\s*(?:{fc_kw})\b', text, re.I):
+        candidates.append(('fc', float(m.group(1).replace(',','.')), m.start(), 'explicit'))
+    for m in re.finditer(rf'\b(?:{fc_kw})\s*({NUM})', text, re.I):
+        candidates.append(('fc', float(m.group(1).replace(',','.')), m.start(), 'explicit'))
 
-    if fc_pattern:
-        fc_val = fc_pattern.group(1).replace(",", ".")
-    elif fc_pattern_rev:
-        fc_val = fc_pattern_rev.group(1)
+    def best(tag):
+        pool = [(v, pos, kind) for (t, v, pos, kind) in candidates if t == tag]
+        if not pool:
+            return None, LOW
+        explicit = [(v, pos, k) for (v, pos, k) in pool if k == 'explicit']
+        chosen = sorted(explicit if explicit else pool, key=lambda x: x[1])
+        return chosen[0][0], (HIGH if explicit else MEDIUM)
 
-    # Shards — prefer "shards <number>" pattern first, then "<number> [FC ]shards"
-    # Use word boundary to avoid matching FC count (e.g. "FC 2700 shards 400")
-    shard_after  = re.search(r'\bshard(?:s)?\s+(\d+(?:[.,]\d+)?)', text, re.I)
-    shard_before = re.search(r'(\d+(?:[.,]\d+)?)\s+(?:FC\s+)?shard(?:s)?\b', text, re.I)
+    fc_raw, fc_conf = best('fc')
+    shard_raw, shard_conf = best('shard')
 
-    if shard_after:
-        shard_val = shard_after.group(1)
-    elif shard_before:
-        shard_val = shard_before.group(1)
+    # Fallback: two bare numbers, no keywords at all
+    all_nums = re.findall(rf'({NUM})', text)
+    if len(all_nums) == 2 and fc_raw is None and shard_raw is None:
+        return all_nums[0], LOW, all_nums[1], LOW
 
-    return fc_val, shard_val
+    def fmt(v):
+        if v is None:
+            return ""
+        return str(int(v)) if v == int(v) else str(v)
+
+    fc_str, shard_str = fmt(fc_raw), fmt(shard_raw)
+
+    # Sanity check: same value for both = something went wrong
+    if fc_str and shard_str and fc_str == shard_str:
+        return fc_str, LOW, shard_str, LOW
+
+    return fc_str, fc_conf, shard_str, shard_conf
 
 
-def normalize_days(raw: str) -> str:
-    """Convert day numbers or names to a consistent 'Mon, Thu' style."""
+def normalize_days(raw):
     if not raw:
-        return ""
-
+        return "", LOW
     day_map = {
-        "1": "Mon", "monday": "Mon",
-        "2": "Tue", "tuesday": "Tue",
-        "3": "Wed", "wednesday": "Wed",
-        "4": "Thu", "thursday": "Thu",
-        "5": "Fri", "friday": "Fri",
-        "6": "Sat", "saturday": "Sat",
-        "7": "Sun", "sunday": "Sun",
+        "1":"Mon","monday":"Mon","2":"Tue","tuesday":"Tue",
+        "3":"Wed","wednesday":"Wed","4":"Thu","thursday":"Thu",
+        "5":"Fri","friday":"Fri","6":"Sat","saturday":"Sat",
+        "7":"Sun","sunday":"Sun",
     }
-
     tokens = re.split(r'[\s,;/]+', raw.lower())
     seen, result = set(), []
     for t in tokens:
         t = t.strip("().")
-        # strip notes like "but not enough speedups"
-        if re.match(r'[a-z]+', t) and t not in day_map:
+        if re.match(r'^[a-z]+$', t) and t not in day_map:
             continue
         mapped = day_map.get(t)
         if mapped and mapped not in seen:
             result.append(mapped)
             seen.add(mapped)
-    return ", ".join(result) if result else raw.strip()
+    if result:
+        return ", ".join(result), HIGH
+    return raw.strip(), LOW
 
 
-def extract_field(block: str, patterns: list[str]) -> str:
-    """Try multiple regex patterns against a block; return first match group 1."""
+def extract_field(block, patterns):
     for pat in patterns:
         m = re.search(pat, block, re.I | re.MULTILINE)
         if m:
@@ -178,66 +167,56 @@ def extract_field(block: str, patterns: list[str]) -> str:
     return ""
 
 
-def parse_block(block: str) -> dict:
-    """Parse a single user data block into a dict."""
-    record = {}
-
-    record["User ID"] = extract_field(block, [
-        r'User\s*ID\s*[:\-]?\s*(\d+)',
-        r'ID\s*[:\-]?\s*(\d+)',
+def parse_block(block):
+    r = {}
+    r["User ID"] = extract_field(block, [
+        r'User\s*ID\s*[:\-]?\s*(\d+)', r'\bID\s*[:\-]?\s*(\d+)',
     ])
+    r["Level"] = extract_field(block, [r'Level\s*[:\-]?\s*(\S+)', r'LVL\s*[:\-]?\s*(\S+)'])
+    r["_conf_Level"] = HIGH if r["Level"] else LOW
 
-    record["Level"] = extract_field(block, [
-        r'Level\s*[:\-]?\s*(\S+)',
-        r'LVL\s*[:\-]?\s*(\S+)',
-    ])
+    for field, pats in [
+        ("Construction", [r'CONSTRUCTION\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
+                          r'Construction\s*[:\-]?\s*([^\n]+)']),
+        ("Research",     [r'RESEARCH\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
+                          r'Research\s*[:\-]?\s*([^\n]+)']),
+        ("Troops",       [r'TROOPS\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
+                          r'Troops\s*[:\-]?\s*([^\n]+)']),
+    ]:
+        raw_val = extract_field(block, pats)
+        val, conf = normalize_duration(raw_val)
+        r[field] = val
+        r[f"_conf_{field}"] = conf
 
-    # Construction / Research / Troops — accept with or without day label
-    record["Construction"] = normalize_duration(extract_field(block, [
-        r'CONSTRUCTION\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
-        r'Construction\s*[:\-]?\s*([^\n]+)',
-    ]))
-
-    record["Research"] = normalize_duration(extract_field(block, [
-        r'RESEARCH\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
-        r'Research\s*[:\-]?\s*([^\n]+)',
-    ]))
-
-    record["Troops"] = normalize_duration(extract_field(block, [
-        r'TROOPS\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
-        r'Troops\s*[:\-]?\s*([^\n]+)',
-    ]))
-
-    # FC / Shards line
     fc_line = extract_field(block, [
-        r'(?:How many FCs[^:\n]*|FC[s]?\s*/\s*[Ss]hard[s]?[^:\n]*)[:\-]?\s*([^\n]+)',
+        r'(?:How many FCs[^:\n]*|FC[s]?\s*/\s*[Ss]hard[s]?[^:\n]*)\s*[:\-]?\s*([^\n]+)',
         r'FC[s]?\s+and[^:\n]*[:\-]?\s*([^\n]+)',
+        r'(?:Crystal[s]?[^:\n]*)\s*[:\-]?\s*([^\n]+)',
     ])
-    fc_val, shard_val = parse_fc_shards(fc_line)
-    record["FCs"]         = fc_val
-    record["FC Shards"]   = shard_val
+    r["_fc_raw"] = fc_line
+    fc_v, fc_c, sh_v, sh_c = parse_fc_shards(fc_line)
+    r["FCs"] = fc_v;         r["_conf_FCs"] = fc_c
+    r["FC Shards"] = sh_v;   r["_conf_FC Shards"] = sh_c
 
-    record["Time UTC"] = extract_field(block, [
+    r["Time UTC"] = extract_field(block, [
         r'Desired\s+time\s+UTC[^:\n]*[:\-]?\s*([^\n]+)',
         r'Time\s+UTC[^:\n]*[:\-]?\s*([^\n]+)',
         r'UTC\s*[:\-]\s*([^\n]+)',
     ]).strip()
+    r["_conf_Time UTC"] = HIGH if r["Time UTC"] else LOW
 
     raw_days = extract_field(block, [
         r'Desired\s+day[s]?\s*(?:\([^)]*\))?\s*[:\-]?\s*([^\n]+)',
         r'Day[s]?\s*[:\-]?\s*([^\n]+)',
     ])
-    record["Days"] = normalize_days(raw_days)
+    dv, dc = normalize_days(raw_days)
+    r["Days"] = dv; r["_conf_Days"] = dc
+    return r
 
-    return record
 
-
-def parse_input(text: str) -> tuple[list[dict], list[str]]:
-    """Split raw text into blocks and parse each. Returns (records, warnings)."""
-    # Split on 'User ID' boundaries
+def parse_input(text):
     parts = re.split(r'(?=User\s*ID\s*[:\-]?\s*\d)', text.strip(), flags=re.I)
     parts = [p.strip() for p in parts if p.strip()]
-
     records, warnings = [], []
     for i, part in enumerate(parts, 1):
         rec = parse_block(part)
@@ -245,11 +224,28 @@ def parse_input(text: str) -> tuple[list[dict], list[str]]:
             warnings.append(f"Block {i}: Could not find User ID — skipped.")
             continue
         records.append(rec)
-
     return records, warnings
 
 
-# ── Sample data ────────────────────────────────────────────────────────────────
+DISPLAY_FIELDS = ["User ID", "Level", "Construction", "Research", "Troops",
+                  "FCs", "FC Shards", "Time UTC", "Days"]
+
+FIELD_HINTS = {
+    "Level":        "e.g. FC3, FC5",
+    "Construction": "e.g. 24d 3h  or  42d  or  35",
+    "Research":     "e.g. 42d  or  20",
+    "Troops":       "e.g. 100d 10h  or  50",
+    "FCs":          "Number of FCs (crystals), e.g. 2.693 or 2700",
+    "FC Shards":    "Number of FC shards, e.g. 434",
+    "Time UTC":     "e.g. 16:00-19:00  or  7-21",
+    "Days":         "e.g. Mon, Thu  or  1, 4",
+}
+
+FIELD_WARN_MSG = {
+    LOW:    "⚠️ Could not parse — please verify",
+    MEDIUM: "🔶 Parsed with low confidence — please check",
+}
+
 SAMPLE = """\
 User ID: 574199347
 Level: FC5
@@ -267,7 +263,7 @@ RESEARCH (Tuesday): 42d
 TROOPS (Thursday): 100d 10h
 How many FCs and FC shards you have: 2.693 FC, 434 FC shards 
 Desired time UTC (minimum 3 hour window): 7utc till 21utc
-Desired day(s): (1 but not enough speedups😓), 2, 4
+Desired day(s): (1 but not enough speedups\U0001f613), 2, 4
 
 User ID: 564134596
 Level: FC3
@@ -277,13 +273,25 @@ TROOPS (Thursday): 100 days
 How many FCs and FC shards you have: 2.693 Crystals, 434 shards 
 Desired time UTC (minimum 3 hour window): 10, 11, 23, 24
 Desired day(s): Monday, Tuesday
+
+User ID: 999000111
+Level: FC4
+CONSTRUCTION (Monday): 15d
+RESEARCH (Tuesday): 30d 12h
+TROOPS (Thursday): 80d
+How many FCs and FC shards you have: 26 FC, 434 FCs
+Desired time UTC (minimum 3 hour window): 14-17
+Desired day(s): 1, 4
 """
 
-# ── Layout ─────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# UI
+# ═══════════════════════════════════════════════════════════════════════════════
+
 st.markdown("""
 <div class="header-block">
   <h1>⚔️ FC DATA PARSER</h1>
-  <p>Paste raw player data in any format — the parser normalises everything into a clean table.</p>
+  <p>Paste raw player data in any format. Uncertain fields are flagged for manual review.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -292,81 +300,117 @@ col_input, col_opts = st.columns([3, 1])
 with col_opts:
     st.markdown("### ⚙️ Options")
     show_empty = st.checkbox("Show empty fields as —", value=True)
-    sort_col   = st.selectbox("Sort by", ["User ID", "Level", "FCs", "FC Shards", "Construction", "Research", "Troops", "Days"])
+    sort_col   = st.selectbox("Sort by", DISPLAY_FIELDS)
     export_csv = st.button("⬇ Download CSV")
 
 with col_input:
     st.markdown("### 📋 Raw Input")
-    raw_text = st.text_area(
-        label="Paste player data blocks below",
-        value=SAMPLE,
-        height=340,
-        label_visibility="collapsed",
-    )
+    raw_text = st.text_area("raw", value=SAMPLE, height=340, label_visibility="collapsed")
 
-# ── Parse & display ────────────────────────────────────────────────────────────
-if raw_text.strip():
-    records, warnings = parse_input(raw_text)
-
-    if warnings:
-        for w in warnings:
-            st.markdown(f'<div class="parse-error">⚠ {w}</div>', unsafe_allow_html=True)
-
-    if records:
-        df = pd.DataFrame(records, columns=[
-            "User ID", "Level", "Construction", "Research", "Troops",
-            "FCs", "FC Shards", "Time UTC", "Days"
-        ])
-
-        if show_empty:
-            df = df.replace("", "—")
-
-        # Sort
-        try:
-            df_sorted = df.sort_values(sort_col, ascending=True, key=lambda s: s.str.lower() if s.dtype == object else s)
-        except Exception:
-            df_sorted = df
-
-        # Metrics row
-        st.markdown(f"""
-        <div class="metric-row">
-          <div class="metric-card"><div class="val">{len(records)}</div><div class="lbl">Players Parsed</div></div>
-          <div class="metric-card"><div class="val">{df['Level'].nunique()}</div><div class="lbl">Unique Levels</div></div>
-          <div class="metric-card"><div class="val">{len(warnings)}</div><div class="lbl">Parse Warnings</div></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("### 📊 Parsed Table")
-        st.dataframe(
-            df_sorted,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "User ID":      st.column_config.TextColumn("User ID",      width="medium"),
-                "Level":        st.column_config.TextColumn("Level",        width="small"),
-                "Construction": st.column_config.TextColumn("Construction 🏗", width="medium"),
-                "Research":     st.column_config.TextColumn("Research 🔬",  width="medium"),
-                "Troops":       st.column_config.TextColumn("Troops ⚔️",   width="medium"),
-                "FCs":          st.column_config.TextColumn("FCs 💎",       width="small"),
-                "FC Shards":    st.column_config.TextColumn("Shards 🔷",    width="small"),
-                "Time UTC":     st.column_config.TextColumn("Time (UTC) 🕐", width="medium"),
-                "Days":         st.column_config.TextColumn("Days 📅",      width="medium"),
-            }
-        )
-
-        if export_csv:
-            csv_data = df_sorted.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="Click to download",
-                data=csv_data,
-                file_name="fc_data.csv",
-                mime="text/csv",
-            )
-
-        with st.expander("🔍 Raw parsed records (JSON)"):
-            st.json(records)
-
-    else:
-        st.warning("No valid records found. Make sure each block starts with 'User ID: <number>'.")
-else:
+if not raw_text.strip():
     st.info("Paste your player data in the text box above.")
+    st.stop()
+
+records, warnings = parse_input(raw_text)
+
+if warnings:
+    for w in warnings:
+        st.markdown(f'<div style="background:#2a1a1a;border:1px solid #7a3030;border-radius:6px;padding:0.6rem 1rem;color:#f08080;margin:0.3rem 0">⚠ {w}</div>', unsafe_allow_html=True)
+
+if not records:
+    st.warning("No valid records found. Make sure each block starts with 'User ID: <number>'.")
+    st.stop()
+
+# ── Session state for corrections ─────────────────────────────────────────────
+input_hash = hash(raw_text)
+if st.session_state.get("_last_hash") != input_hash:
+    st.session_state["corrections"] = {
+        rec["User ID"]: {f: rec[f] for f in DISPLAY_FIELDS if f != "User ID"}
+        for rec in records
+    }
+    st.session_state["_last_hash"] = input_hash
+
+# ── Verification panels ────────────────────────────────────────────────────────
+uncertain = [
+    rec for rec in records
+    if any(rec.get(f"_conf_{f}", HIGH) in (LOW, MEDIUM)
+           for f in DISPLAY_FIELDS if f != "User ID")
+]
+
+if uncertain:
+    n = len(uncertain)
+    st.markdown(f"""
+    <div class="verify-banner">
+      <b>⚠️ {n} record{'s' if n>1 else ''} need your attention</b> —
+      some fields could not be parsed confidently. Please review below before exporting.
+    </div>""", unsafe_allow_html=True)
+
+    for rec in uncertain:
+        uid = rec["User ID"]
+        flagged = [f for f in DISPLAY_FIELDS if f != "User ID"
+                   and rec.get(f"_conf_{f}", HIGH) in (LOW, MEDIUM)]
+        with st.expander(f"🔶 User {uid} — {len(flagged)} field{'s' if len(flagged)>1 else ''} flagged", expanded=True):
+            if "_fc_raw" in rec and any(f in flagged for f in ("FCs", "FC Shards")):
+                st.markdown(
+                    f'<div style="font-family:monospace;font-size:0.82rem;color:#7a9ac0;margin-bottom:0.8rem">'
+                    f'Original FC line: <span style="color:#c0d8f8">{rec["_fc_raw"]}</span></div>',
+                    unsafe_allow_html=True
+                )
+            cols = st.columns(min(len(flagged), 3))
+            for i, field in enumerate(flagged):
+                conf = rec.get(f"_conf_{field}", HIGH)
+                with cols[i % min(len(flagged), 3)]:
+                    new_val = st.text_input(
+                        label=field,
+                        value=st.session_state["corrections"][uid].get(field, ""),
+                        key=f"fix_{uid}_{field}",
+                        placeholder=FIELD_HINTS.get(field, ""),
+                    )
+                    st.markdown(f'<div class="field-warn">{FIELD_WARN_MSG.get(conf,"")}</div>', unsafe_allow_html=True)
+                    st.session_state["corrections"][uid][field] = new_val
+
+# ── Merge corrections & build display df ──────────────────────────────────────
+final = []
+for rec in records:
+    uid = rec["User ID"]
+    row = {f: rec[f] for f in DISPLAY_FIELDS}
+    row.update(st.session_state["corrections"].get(uid, {}))
+    final.append(row)
+
+df = pd.DataFrame(final, columns=DISPLAY_FIELDS)
+if show_empty:
+    df = df.replace("", "—")
+try:
+    df_sorted = df.sort_values(sort_col, ascending=True,
+                               key=lambda s: s.str.lower() if s.dtype==object else s)
+except Exception:
+    df_sorted = df
+
+n_flagged = len(uncertain)
+st.markdown(f"""
+<div class="metric-row">
+  <div class="metric-card"><div class="val">{len(records)}</div><div class="lbl">Players Parsed</div></div>
+  <div class="metric-card"><div class="val">{df['Level'].nunique()}</div><div class="lbl">Unique Levels</div></div>
+  <div class="metric-card"><div class="val">{n_flagged}</div><div class="lbl">Need Review</div></div>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("### 📊 Parsed Table")
+st.dataframe(df_sorted, use_container_width=True, hide_index=True, column_config={
+    "User ID":      st.column_config.TextColumn("User ID",          width="medium"),
+    "Level":        st.column_config.TextColumn("Level",            width="small"),
+    "Construction": st.column_config.TextColumn("Construction 🏗",  width="medium"),
+    "Research":     st.column_config.TextColumn("Research 🔬",      width="medium"),
+    "Troops":       st.column_config.TextColumn("Troops ⚔️",       width="medium"),
+    "FCs":          st.column_config.TextColumn("FCs 💎",           width="small"),
+    "FC Shards":    st.column_config.TextColumn("Shards 🔷",        width="small"),
+    "Time UTC":     st.column_config.TextColumn("Time (UTC) 🕐",    width="medium"),
+    "Days":         st.column_config.TextColumn("Days 📅",          width="medium"),
+})
+
+if export_csv:
+    st.download_button("Click to download", df_sorted.to_csv(index=False).encode("utf-8"),
+                       "fc_data.csv", "text/csv")
+
+with st.expander("🔍 Raw parsed records (JSON)"):
+    st.json(records)
