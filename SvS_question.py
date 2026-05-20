@@ -130,8 +130,8 @@ st.markdown("""
 
 NUM = r'\d+(?:[.,]\d+)?'
 HIGH, MEDIUM, LOW = "high", "medium", "low"
-MAX_REASONABLE_DAYS   = 365
-MIN_TIME_WINDOW_HOURS = 3
+MAX_REASONABLE_DAYS    = 365
+MIN_TIME_WINDOW_SLOTS  = 6   # 6 × 30-min slots = 3 hours
 
 DISPLAY_FIELDS = ["User ID", "Level", "Construction", "Research", "Troops",
                   "FCs", "FC Shards", "Time UTC", "Days"]
@@ -143,7 +143,7 @@ FIELD_HINTS = {
     "Troops":       "e.g. 100d 10h  or  50",
     "FCs":          "Number of FCs, e.g. 2693 or 2700",
     "FC Shards":    "Number of shards, e.g. 434",
-    "Time UTC":     "e.g. 16:00–19:00  or  7–21",
+    "Time UTC":     "e.g. 16:00–19:00  or  14:30-17  or  13",
     "Days":         "e.g. Mon, Thu  or  1, 4",
 }
 
@@ -292,37 +292,93 @@ def parse_fc_shards(raw):
     )
 
 
+def parse_hhmm(s):
+    """
+    Parse 'HH', 'HH:MM', or 'HH.MM' string → total minutes (int).
+    Returns None if the value is out of range or unparseable.
+    """
+    s = s.strip()
+    m = re.match(r'^(\d{1,2})[.:](\d{2})$', s)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+    else:
+        m = re.match(r'^(\d{1,2})$', s)
+        if not m:
+            return None
+        h, mi = int(m.group(1)), 0
+    return h * 60 + mi if (0 <= h <= 23 and 0 <= mi <= 59) else None
+
+
 def normalize_time_utc(raw):
     """
-    Returns (hours_str, confidence, hour_count).
-    hour_count < MIN_TIME_WINDOW_HOURS triggers a validation warning.
+    Returns (slots_str, confidence, slot_count).
+
+    All times are stored as 30-minute slots in 'HH:MM' format, e.g. '14:00,14:30,15:00'.
+
+    Rules:
+      - Single point (e.g. '13' or '13:00') → two slots: 13:00 and 13:30
+      - Range (e.g. '14 till 15:30')         → slots from start up to (not including) end:
+                                                14:00, 14:30, 15:00
+      - Overnight ranges (e.g. '22-02')       → wrap around midnight correctly
+
+    slot_count < MIN_TIME_WINDOW_SLOTS (6 slots = 3 h) triggers a validation warning.
     """
     if not raw:
         return "", LOW, 0
 
     text = raw.lower().strip()
-    text = text.replace("till", "-").replace(" to ", "-")
-    hours = set()
+    text = text.replace("till", "-").replace(" to ", "-").replace("\u2013", "-")
+    slots = set()  # minutes from midnight (multiples of 30)
 
-    range_pat = r'(\d{1,2})(?:[:.]\d{2})?\s*(?:utc)?\s*-\s*(\d{1,2})(?:[:.]\d{2})?\s*(?:utc)?'
+    TIME_PAT  = r'\d{1,2}(?:[.:]\d{2})?'
+    range_pat = rf'({TIME_PAT})\s*(?:utc)?\s*-\s*({TIME_PAT})\s*(?:utc)?'
+
     for m in re.finditer(range_pat, text):
-        s, e = int(m.group(1)), int(m.group(2))
-        if not (0 <= s <= 23 and 0 <= e <= 23):
+        start = parse_hhmm(m.group(1))
+        end   = parse_hhmm(m.group(2))
+        if start is None or end is None:
             continue
-        expanded = (list(range(s, 24)) + list(range(0, e + 1))
-                    if s > e else list(range(s, e + 1)))
-        hours.update(expanded)
+        # Snap both boundaries to lower 30-min boundary
+        start = (start // 30) * 30
+        end   = (end   // 30) * 30
+        if start == end:
+            continue
+        if start < end:
+            t = start
+            while t < end:
+                slots.add(t)
+                t += 30
+        else:
+            # Overnight wrap
+            t = start
+            while t < 24 * 60:
+                slots.add(t)
+                t += 30
+            t = 0
+            while t < end:
+                slots.add(t)
+                t += 30
 
+    # Remove matched ranges from text before scanning for single points
     text_no_ranges = re.sub(range_pat, " ", text)
-    for m in re.finditer(r'\b(\d{1,2})(?:[:.]\d{2})?\s*(?:utc)?\b', text_no_ranges):
-        h = int(m.group(1))
-        if 0 <= h <= 23:
-            hours.add(h)
+    for m in re.finditer(rf'\b({TIME_PAT})\s*(?:utc)?\b', text_no_ranges):
+        t = parse_hhmm(m.group(1))
+        if t is None:
+            continue
+        slot = (t // 30) * 30
+        if 0 <= slot < 24 * 60:
+            slots.add(slot)
+            next_slot = slot + 30
+            if next_slot < 24 * 60:
+                slots.add(next_slot)
 
-    if not hours:
+    if not slots:
         return "", LOW, 0
 
-    return ",".join(map(str, sorted(hours))), HIGH, len(hours)
+    valid      = sorted(s for s in slots if 0 <= s < 24 * 60)
+    slot_count = len(valid)
+    slots_str  = ",".join(f"{s // 60:02d}:{s % 60:02d}" for s in valid)
+    return slots_str, HIGH, slot_count
 
 
 def normalize_days(raw):
@@ -400,11 +456,13 @@ def parse_block(block):
         r'Time\s+UTC[^:\n]*[:\-]?\s*([^\n]+)',
         r'UTC\s*[:\-]\s*([^\n]+)',
     ]).strip()
-    tv, tc, hour_count = normalize_time_utc(raw_time)
+    tv, tc, slot_count = normalize_time_utc(raw_time)
     r["Time UTC"] = tv
-    if tv and hour_count < MIN_TIME_WINDOW_HOURS:
+    if tv and slot_count < MIN_TIME_WINDOW_SLOTS:
         r["_conf_Time UTC"] = MEDIUM
-        r["_warn_Time UTC"] = f"Only {hour_count}h window — minimum is {MIN_TIME_WINDOW_HOURS}h"
+        r["_warn_Time UTC"] = (
+            f"Only {slot_count / 2:.4g}h window — minimum is 3h"
+        )
     else:
         r["_conf_Time UTC"] = tc
 
@@ -569,23 +627,19 @@ if not raw_text.strip():
 
 records, parse_warnings = parse_input(raw_text)
 
-# Preserve manual corrections across re-parses — only reset entries for new UIDs
+# When raw input changes, reset corrections from the fresh parse.
+# (Carrying old corrections forward would hide changes the user just made.)
 input_hash = hash(raw_text)
 if st.session_state["_last_hash"] != input_hash:
-    old_corr = st.session_state["corrections"]
-    new_corr  = {}
+    new_corr = {}
     for rec in records:
-        uid  = rec["User ID"]
-        base = {f: rec[f] for f in DISPLAY_FIELDS if f != "User ID"}
-        # Keep any previously saved corrections for this UID
-        if uid in old_corr:
-            base.update(old_corr[uid])
-        new_corr[uid] = base
-    # Keep manual record corrections untouched
+        uid = rec["User ID"]
+        new_corr[uid] = {f: rec[f] for f in DISPLAY_FIELDS if f != "User ID"}
+    # Keep manual-record entries untouched
     for mrec in st.session_state["manual_records"]:
         uid = mrec["User ID"]
-        if uid in old_corr:
-            new_corr[uid] = old_corr[uid]
+        if uid not in new_corr:
+            new_corr[uid] = {f: mrec.get(f, "") for f in DISPLAY_FIELDS if f != "User ID"}
     st.session_state["corrections"] = new_corr
     st.session_state["_last_hash"]  = input_hash
 
@@ -698,7 +752,7 @@ with st.expander("➕ Add player manually"):
             m_fcs    = st.text_input("FCs",           placeholder="e.g. 2700") 
         with c3:
             m_shards = st.text_input("FC Shards",     placeholder="e.g. 434")
-            m_time   = st.text_input("Time UTC",      placeholder="e.g. 14-17")
+            m_time   = st.text_input("Time UTC",      placeholder="e.g. 14:00-17:30")
             m_days   = st.text_input("Days",          placeholder="e.g. 1, 2")
 
         submitted = st.form_submit_button("Add Player", use_container_width=True)
@@ -710,13 +764,13 @@ with st.expander("➕ Add player manually"):
         elif uid_str in [r["User ID"] for r in all_records]:
             st.error(f"User ID {uid_str} already exists.")
         else:
-            constr_v, constr_c   = normalize_duration(m_constr)
-            res_v,    res_c      = normalize_duration(m_res)
-            troops_v, troops_c   = normalize_duration(m_troops)
-            fc_raw               = f"FC {m_fcs} shards {m_shards}" if (m_fcs or m_shards) else ""
+            constr_v, constr_c      = normalize_duration(m_constr)
+            res_v,    res_c         = normalize_duration(m_res)
+            troops_v, troops_c      = normalize_duration(m_troops)
+            fc_raw                  = f"FC {m_fcs} shards {m_shards}" if (m_fcs or m_shards) else ""
             fc_v, fc_c, sh_v, sh_c = parse_fc_shards(fc_raw)
-            time_v, time_c, hcount = normalize_time_utc(m_time)
-            if time_v and hcount < MIN_TIME_WINDOW_HOURS:
+            time_v, time_c, scount  = normalize_time_utc(m_time)
+            if time_v and scount < MIN_TIME_WINDOW_SLOTS:
                 time_c = MEDIUM
             days_v, days_c = normalize_days(m_days)
 
@@ -734,8 +788,10 @@ with st.expander("➕ Add player manually"):
                 "_raw_block": "(manual entry)",
                 "_manual": True,
             }
-            if time_v and hcount < MIN_TIME_WINDOW_HOURS:
-                new_rec["_warn_Time UTC"] = f"Only {hcount}h window — minimum is {MIN_TIME_WINDOW_HOURS}h"
+            if time_v and scount < MIN_TIME_WINDOW_SLOTS:
+                new_rec["_warn_Time UTC"] = (
+                    f"Only {scount / 2:.4g}h window — minimum is 3h"
+                )
 
             st.session_state["manual_records"].append(new_rec)
             st.session_state["corrections"][uid_str] = {
@@ -821,7 +877,7 @@ st.dataframe(
         "Troops":       st.column_config.NumberColumn("Troops",       format="%.2f", width="small"),
         "FCs":          st.column_config.NumberColumn("FCs",          format="%d",   width="small"),
         "FC Shards":    st.column_config.NumberColumn("Shards",       format="%d",   width="small"),
-        "Time UTC":     st.column_config.TextColumn("Time (UTC)",    width="medium"),
+        "Time UTC":     st.column_config.TextColumn("Time (UTC)",    width="large"),
         "Days":         st.column_config.TextColumn("Days",          width="small"),
         "":             st.column_config.TextColumn("",              width="small",
                             help="✎ = manually added record"),
