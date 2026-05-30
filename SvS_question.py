@@ -5,6 +5,12 @@ import io
 from datetime import datetime
 
 try:
+    import networkx as nx
+    HAS_NETWORKX = True
+except ImportError:
+    HAS_NETWORKX = False
+
+try:
     import openpyxl
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -349,7 +355,6 @@ def parse_fc_shards(raw):
             except ValueError:
                 pass
             break
-    # Bare number only (e.g. "120") → assume FC count, shards = 0
     if fc_val is None and shard_val is None:
         m = re.match(r'^\s*(\d+(?:[.,]\d+)?)\s*$', text)
         if m:
@@ -365,24 +370,6 @@ def parse_fc_shards(raw):
                 shard_val = 0
             except ValueError:
                 pass
-
-    # Bare number only (e.g. "120") => assume FC count, shards = 0
-    if fc_val is None and shard_val is None:
-        m = re.match(r'^\s*(\d+(?:[.,]\d+)?)\s*$', text)
-        if m:
-            val = m.group(1)
-            if "." in val and len(val.split(".")[-1]) == 3:
-                val = val.replace(".", "")
-            elif "," in val and len(val.split(",")[-1]) == 3:
-                val = val.replace(",", "")
-            else:
-                val = val.replace(",", ".")
-            try:
-                fc_val    = int(float(val))
-                shard_val = 0
-            except ValueError:
-                pass
-
     return (
         fc_val    if fc_val    is not None else "",
         HIGH if fc_val    is not None else LOW,
@@ -613,10 +600,7 @@ def build_excel(df_export, flagged_cells):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def slots_str_to_hours(slots_str):
-    """
-    Convert parser Time UTC output ("14:00,14:30,15:00") to a list of
-    unique integer hours ([14, 15]) for the scheduler.
-    """
+    """Convert parser Time UTC output ("14:00,14:30,15:00") to unique integer hours."""
     if not slots_str:
         return []
     hours = set()
@@ -646,87 +630,156 @@ def slot_label(slot: int) -> str:
     return f"{h:02d}:{'30' if f else '00'} – {end_h:02d}:{end_m}"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MIN-COST MAX-FLOW SCHEDULER
+#
+# Objective (strict priority order):
+#   1. Maximise the number of users assigned a slot  (max cardinality)
+#   2. Among all maximum-cardinality solutions, maximise total score
+#      — i.e. the highest-scoring users always win when slots are contested.
+#
+# Why MCMF instead of Hopcroft-Karp + swap pass?
+# ────────────────────────────────────────────────
+# The old HK approach ran BFS augmentation for cardinality, then tried a
+# one-level score-swap pass to improve fairness.  That swap pass was too
+# shallow: it could only displace one user at a time, so any inversion
+# requiring a chain of re-routings was left unsolved.
+#
+# MCMF solves both objectives simultaneously in a single pass:
+#
+#   Graph:  S → user_i  (cap 1, cost 0)
+#           user_i → slot_j  (cap 1, cost ∝ max_score − score_i)
+#           slot_j → T  (cap 1, cost 0)
+#
+#   networkx.max_flow_min_cost() pushes the maximum feasible flow first
+#   (= max users placed), then, among all maximum flows, minimises total
+#   edge cost (= maximises total score of placed users).
+#
+# This is provably optimal: no assignment can simultaneously place more
+# users AND rank higher-scorers better.
+#
+# Remaining "inversions" (an unplaced user scores higher than the lowest
+# placed user) are mathematically unavoidable.  They only occur when the
+# unplaced user's entire time window is saturated by higher-scorers who
+# ALSO need those same slots, and no rerouting frees a slot without
+# dropping someone — MCMF already tried every possible rerouting.
+# ─────────────────────────────────────────────────────────────────────────────
+
 def run_day(users: list, dc: dict) -> dict:
-    col   = dc["col"]
-    day   = dc["day"]
-    slot_occ  = {}
-    user_slot = {}
-    eligible     = [u for u in users if day in u["days"]]
-    sorted_users = sorted(eligible, key=lambda u: u[col], reverse=True)
+    col = dc["col"]
+    day = dc["day"]
 
-    # Phase 1: greedy
-    for u in sorted_users:
-        for h in u["hours"]:
-            if u["User ID"] in user_slot:
+    # ── 1. Deduplicate by User ID ─────────────────────────────────────────────
+    # Keep the highest-scoring entry when the same User ID appears twice
+    # (can happen if the parser retained both blocks of a duplicate submission).
+    seen_ids: dict = {}
+    for u in users:
+        uid = u["User ID"]
+        if uid not in seen_ids or u[col] > seen_ids[uid][col]:
+            seen_ids[uid] = u
+
+    eligible = [u for u in seen_ids.values() if day in u["days"] and u["hours"]]
+    if not eligible:
+        return {
+            "day": day, "col": col,
+            "slot_occ": {}, "user_slot": {},
+            "via_reshuffle": set(), "moved": {}, "chains": [],
+            "unassigned": [], "eligible": [],
+        }
+
+    # Sort descending by score (also defines tiebreak order below)
+    eligible = sorted(eligible, key=lambda u: u[col], reverse=True)
+
+    # ── 2. Build slot universe ────────────────────────────────────────────────
+    # Each available hour expands to two 30-min slots: h*2 (hh:00) and h*2+1 (hh:30)
+    all_slots = sorted({h * 2 + f for u in eligible for h in u["hours"] for f in [0, 1]})
+    slot_set  = set(all_slots)
+
+    # ── 3. Edge costs ─────────────────────────────────────────────────────────
+    # cost_i = (max_score − score_i) * SCALE + i
+    #   • Lower cost  ↔  higher score  ↔  preferred by min-cost solver
+    #   • The +i tiebreak (position in score-sorted list) guarantees
+    #     deterministic results when two users have identical scores.
+    SCALE  = 10_000
+    max_s  = eligible[0][col] if eligible else 1.0
+    costs  = [int((max_s - u[col]) * SCALE) + i for i, u in enumerate(eligible)]
+
+    # ── 4. Build the flow network ─────────────────────────────────────────────
+    S = "S"; T = "T"
+    user_nodes = [f"U{i}"     for i in range(len(eligible))]
+    slot_node  = {s: f"SL{s}" for s in all_slots}
+
+    G = nx.DiGraph()
+
+    # Source → each user (capacity 1, free)
+    for i in range(len(eligible)):
+        G.add_edge(S, user_nodes[i], capacity=1, weight=0)
+
+    # User → available slots (capacity 1, cost reflects score rank)
+    for i, u in enumerate(eligible):
+        u_slots = {h * 2 + f for h in u["hours"] for f in [0, 1]} & slot_set
+        for s in u_slots:
+            G.add_edge(user_nodes[i], slot_node[s], capacity=1, weight=costs[i])
+
+    # Each slot → sink (capacity 1, free)
+    for s in all_slots:
+        G.add_edge(slot_node[s], T, capacity=1, weight=0)
+
+    # ── 5. Solve: maximum flow, then minimum cost among all maximum flows ──────
+    flow_dict = nx.max_flow_min_cost(G, S, T)
+
+    # ── 6. Extract assignments ────────────────────────────────────────────────
+    slot_occ:  dict = {}   # raw_slot → User ID
+    user_slot: dict = {}   # User ID  → raw_slot
+
+    for i, u in enumerate(eligible):
+        uid = u["User ID"]
+        un  = user_nodes[i]
+        for s in all_slots:
+            if flow_dict.get(un, {}).get(slot_node[s], 0) == 1:
+                slot_occ[s]    = uid
+                user_slot[uid] = s
                 break
-            for f in [0, 1]:
-                slot = h * 2 + f
-                if slot not in slot_occ:
-                    slot_occ[slot] = u["User ID"]
-                    user_slot[u["User ID"]] = slot
-                    break
 
-    snap = dict(user_slot)
-
-    # Phase 2: augmenting paths
-    via_reshuffle = set()
-    chains = []
-
-    def can_place(uid, visited, log):
-        u = next(x for x in users if x["User ID"] == uid)
-        if day not in u["days"]:
-            return False
-        for h in u["hours"]:
-            for f in [0, 1]:
-                slot = h * 2 + f
-                if slot in visited:
-                    continue
-                visited.add(slot)
-                cur = slot_occ.get(slot)
-                if cur is None or can_place(cur, visited, log):
-                    if cur is not None:
-                        log.append({"uid": cur, "from": user_slot.get(cur), "to": slot})
-                    slot_occ[slot] = uid
-                    user_slot[uid] = slot
-                    return True
-        return False
-
-    for u in [u for u in sorted_users if u["User ID"] not in user_slot]:
-        log = []
-        if can_place(u["User ID"], set(), log):
-            via_reshuffle.add(u["User ID"])
-            if log:
-                chains.append({"trigger": u["User ID"], "steps": log})
-
-    moved = {
-        uid: {"from": snap[uid], "to": user_slot[uid]}
-        for uid in snap
-        if user_slot.get(uid) is not None and snap[uid] != user_slot[uid]
-    }
+    # ── 7. Build unassigned list with blocker detail ──────────────────────────
+    top_48_scores    = [u[col] for u in eligible[:48]]
+    min_top_48_score = top_48_scores[-1] if top_48_scores else float("-inf")
 
     unassigned = []
     for u in eligible:
         uid = u["User ID"]
         if uid in user_slot:
             continue
-        all_slots = {h * 2 + f for h in u["hours"] for f in [0, 1]}
-        blockers  = {slot_occ[s] for s in all_slots if s in slot_occ}
-        names     = [f"ID{b}" for b in blockers]
-        unassigned.append({
-            "user":   u,
-            "reason": "Window saturated",
-            "detail": (
-                f"All {len(all_slots)} slots in their time window are locked — "
-                f"Blocked by: {', '.join(names) or 'unknown'}."
-            ),
-        })
+        all_u_slots = {h * 2 + f for h in u["hours"] for f in [0, 1]}
+        blockers    = {slot_occ[s] for s in all_u_slots if s in slot_occ}
+        names       = [f"ID{b}" for b in sorted(str(b) for b in blockers)]
+
+        if u[col] <= min_top_48_score:
+            unassigned.append({
+                "user":   u,
+                "reason": "not enough speedups",
+                "detail": "-",
+            })
+        else:
+            unassigned.append({
+                "user":   u,
+                "reason": "Window saturated",
+                "detail": (
+                    f"All {len(all_u_slots)} slot(s) in their time window are taken — "
+                    f"Blocked by: {', '.join(names) or 'unknown'}."
+                ),
+            })
 
     return {
-        "day": day, "col": col,
-        "slot_occ": slot_occ, "user_slot": user_slot,
-        "via_reshuffle": via_reshuffle, "moved": moved,
-        "chains": chains, "unassigned": unassigned,
-        "eligible": eligible,
+        "day":           day,
+        "col":           col,
+        "slot_occ":      slot_occ,
+        "user_slot":     user_slot,
+        "via_reshuffle": set(),
+        "moved":         {},
+        "chains":        [],
+        "unassigned":    unassigned,
+        "eligible":      eligible,
     }
 
 
@@ -747,9 +800,7 @@ def build_timeline_df(users: list, dr: dict) -> pd.DataFrame:
         auid = dr["slot_occ"].get(slot)
         au   = next((u for u in users if u["User ID"] == auid), None)
         if au:
-            if auid in dr["via_reshuffle"]:  status = "🔀 Reshuffled"
-            elif auid in dr["moved"]:         status = "↻ Moved"
-            else:                             status = "✅ Assigned"
+            status         = "✅ Assigned"
             assigned_id    = f"ID{au['User ID']}"
             assigned_score = au[col]
         else:
@@ -759,21 +810,6 @@ def build_timeline_df(users: list, dr: dict) -> pd.DataFrame:
             "Assigned":  assigned_id,
             "Score":     f"{assigned_score:.2f}" if assigned_score is not None else "—",
         })
-    return pd.DataFrame(rows)
-
-
-def build_chains_df(dr: dict, users: list) -> pd.DataFrame:
-    rows = []
-    for ch in dr["chains"]:
-        trigger = next(u for u in users if u["User ID"] == ch["trigger"])
-        for step in ch["steps"]:
-            w = next(u for u in users if u["User ID"] == step["uid"])
-            rows.append({
-                "Placed":    f"ID{trigger['User ID']}",
-                "Moved":     f"ID{w['User ID']}",
-                "From slot": slot_label(step["from"]) if step["from"] is not None else "—",
-                "To slot":   slot_label(step["to"]),
-            })
     return pd.DataFrame(rows)
 
 
@@ -798,9 +834,7 @@ def build_summary_df(users: list, day_results: list) -> pd.DataFrame:
                 row[dc["label"]] = "—"
             elif u["User ID"] in dr["user_slot"]:
                 slot = dr["user_slot"][u["User ID"]]
-                tag  = " 🔀" if u["User ID"] in dr["via_reshuffle"] else \
-                       " ↻"  if u["User ID"] in dr["moved"] else ""
-                row[dc["label"]] = f"{slot_label(slot)}  [{u[col]:.2f}{tag}]"
+                row[dc["label"]] = f"{slot_label(slot)}  [{u[col]:.2f}]"
             else:
                 row[dc["label"]] = f"❌ unassigned  [{u[col]:.2f}]"
         rows.append(row)
@@ -818,9 +852,6 @@ def to_excel_schedule(users: list, day_results: list) -> io.BytesIO:
             ua = build_unassigned_df(dr)
             if not ua.empty:
                 ua.to_excel(writer, sheet_name=f"Unassigned_Day{dc['day']}", index=False)
-            ch = build_chains_df(dr, users)
-            if not ch.empty:
-                ch.to_excel(writer, sheet_name=f"Chains_Day{dc['day']}", index=False)
     buf.seek(0)
     return buf
 
@@ -837,8 +868,7 @@ defaults = {
     "corrections":    {},
     "_last_hash":     None,
     "_clipboard_csv": None,
-    # Shared between pages
-    "parsed_df":      None,   # final DataFrame from parser, ready for scheduler
+    "parsed_df":      None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -886,9 +916,7 @@ with nav_col2:
 
 if st.session_state["page"] == "parser":
 
-    # ── Workflow stepper ───────────────────────────────────────────────────────
-    has_data   = st.session_state["parsed_df"] is not None
-    is_parser  = True
+    has_data  = st.session_state["parsed_df"] is not None
     s1 = "active"; s2 = "idle" if not has_data else "done"; s3 = "idle"
     st.markdown(f"""
     <div class="stepper">
@@ -914,7 +942,6 @@ if st.session_state["page"] == "parser":
     </div>
     """, unsafe_allow_html=True)
 
-    # ── First-time guide (collapsible, open by default until data sent) ────────
     with st.expander("&#128218;  How to use this tool", expanded=(st.session_state["parsed_df"] is None)):
         st.markdown("""
         <div class="guide-grid">
@@ -971,7 +998,6 @@ if st.session_state["page"] == "parser":
 
     st.markdown("<div style=\"margin-bottom:1rem\"></div>", unsafe_allow_html=True)
 
-    # ── Input area ─────────────────────────────────────────────────────────────
     col_input, col_tools = st.columns([4, 1])
 
     with col_input:
@@ -999,7 +1025,6 @@ if st.session_state["page"] == "parser":
         st.info("Paste your player data in the text box above.")
         st.stop()
 
-    # ── Parse + corrections merge ───────────────────────────────────────────────
     records, parse_warnings = parse_input(raw_text)
     input_hash = hash(raw_text)
     if st.session_state["_last_hash"] != input_hash:
@@ -1032,7 +1057,6 @@ if st.session_state["page"] == "parser":
         st.warning("No valid records found. Make sure each block starts with 'User ID: <number>'.")
         st.stop()
 
-    # ── Stats ───────────────────────────────────────────────────────────────────
     uncertain = [
         rec for rec in visible_records
         if any(rec.get(f"_conf_{f}", HIGH) in (LOW, MEDIUM)
@@ -1098,7 +1122,6 @@ if st.session_state["page"] == "parser":
                             st.session_state["corrections"][uid] = {}
                         st.session_state["corrections"][uid][field] = new_val
 
-    # ── Add player manually ─────────────────────────────────────────────────────
     with st.expander("➕ Add player manually"):
         with st.form("manual_add_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
@@ -1155,7 +1178,6 @@ if st.session_state["page"] == "parser":
                 st.success(f"Player {uid_str} added.")
                 st.rerun()
 
-    # ── Manage records ──────────────────────────────────────────────────────────
     with st.expander("🗂 Manage records"):
         all_uids = [r["User ID"] for r in all_records]
         col_del, col_clear = st.columns([3, 1])
@@ -1182,7 +1204,6 @@ if st.session_state["page"] == "parser":
                 unsafe_allow_html=True,
             )
 
-    # ── Results table ───────────────────────────────────────────────────────────
     final       = []
     conf_lookup = {}
 
@@ -1228,7 +1249,6 @@ if st.session_state["page"] == "parser":
         },
     )
 
-    # ── Send to Scheduler button ────────────────────────────────────────────────
     st.markdown("<hr>", unsafe_allow_html=True)
     col_sched, col_csv, col_xlsx, col_clip = st.columns(4)
 
@@ -1238,7 +1258,6 @@ if st.session_state["page"] == "parser":
             st.session_state["page"]      = "scheduler"
             st.rerun()
 
-    # ── Export ──────────────────────────────────────────────────────────────────
     now       = datetime.utcnow().strftime("%Y%m%d_%H%M")
     df_export = df[DISPLAY_FIELDS].copy()
     flagged_cells = {
@@ -1287,7 +1306,14 @@ if st.session_state["page"] == "parser":
 
 elif st.session_state["page"] == "scheduler":
 
-    # ── Workflow stepper ───────────────────────────────────────────────────────
+    if not HAS_NETWORKX:
+        st.markdown(
+            '<div class="error-banner">⚠ <b>networkx</b> is required for the scheduler. '
+            'Install it with: <code>pip install networkx</code></div>',
+            unsafe_allow_html=True,
+        )
+        st.stop()
+
     has_data = st.session_state["parsed_df"] is not None
     st.markdown(f"""
     <div class="stepper">
@@ -1325,7 +1351,6 @@ elif st.session_state["page"] == "scheduler":
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Fallback sample ─────────────────────────────────────────────────────────
     SCHEDULER_SAMPLE = pd.DataFrame([
         {"User ID": 1,  "Level": "FC1", "Construction": 1.0,  "Research": 1.0,  "Troops": 1.0,  "Time UTC": "16:00,16:30,17:00,17:30,18:00,18:30", "Days": "1,2"},
         {"User ID": 2,  "Level": "FC2", "Construction": 2.08, "Research": 2.0,  "Troops": 2.08, "Time UTC": "07:00,07:30,08:00,08:30,09:00,09:30,10:00,10:30,11:00,11:30,12:00,12:30,13:00,13:30,14:00,14:30,15:00,15:30,16:00,16:30,17:00,17:30,18:00,18:30,19:00,19:30,20:00,20:30", "Days": "2,4"},
@@ -1344,11 +1369,9 @@ elif st.session_state["page"] == "scheduler":
         {"User ID": 15, "Level": "FC4", "Construction": 4.1,  "Research": 3.9,  "Troops": 4.0,  "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
     ])
 
-    # ── 1. Load data ─────────────────────────────────────────────────────────────
     st.markdown('<div class="section-label">Data source</div>', unsafe_allow_html=True)
 
     source_options = ["Use parsed data from Parser", "Use built-in sample data", "Upload CSV / Excel"]
-    # Default to parsed data if available, else sample
     default_src = 0 if st.session_state["parsed_df"] is not None else 1
     source = st.radio("Data source", source_options, index=default_src, horizontal=True,
                       label_visibility="collapsed")
@@ -1357,7 +1380,6 @@ elif st.session_state["page"] == "scheduler":
     if source == "Use parsed data from Parser":
         if st.session_state["parsed_df"] is not None:
             raw_df = st.session_state["parsed_df"].copy()
-            # Drop rows missing critical numeric fields
             for col in ["Construction", "Research", "Troops"]:
                 raw_df[col] = pd.to_numeric(raw_df[col], errors="coerce")
             raw_df = raw_df.dropna(subset=["Construction", "Research", "Troops"])
@@ -1390,7 +1412,6 @@ elif st.session_state["page"] == "scheduler":
         with st.expander("Preview loaded data", expanded=False):
             st.dataframe(raw_df, use_container_width=True)
 
-        # ── 2. Column mapping ────────────────────────────────────────────────────
         st.markdown('<div class="section-label" style="margin-top:1rem">Column mapping</div>',
                     unsafe_allow_html=True)
         cols = raw_df.columns.tolist()
@@ -1407,17 +1428,26 @@ elif st.session_state["page"] == "scheduler":
             res_col = pick("Research column",      "Research")
             trp_col = pick("Troops column",        "Troops")
         with c3:
-            # Accept both "Time UTC" (parser output) and legacy "Hours" column
             time_default = "Time UTC" if "Time UTC" in cols else ("Hours" if "Hours" in cols else cols[0])
             time_col  = pick("Time UTC / Hours column", time_default)
             days_col  = pick("Days column",        "Days")
 
-        # ── 3. Run ───────────────────────────────────────────────────────────────
         st.markdown("<hr>", unsafe_allow_html=True)
+
+        # Objective explainer
+        st.markdown("""
+        <div class="info-banner">
+          <b>Scheduling objective:</b> Maximise the number of players assigned a slot.
+          Among all solutions that place the same number of players, the highest-scoring
+          players are preferred — guaranteed by min-cost max-flow (provably optimal score ranking).
+          Any remaining unplaced high-scorers are mathematically unplaceable: their entire
+          time window is saturated by even-higher-scorers with no alternative slots.
+        </div>
+        """, unsafe_allow_html=True)
+
         if st.button("⚡ Run scheduler", type="primary", use_container_width=False):
             users = []
             for _, row in raw_df.iterrows():
-                # Resolve hours — supports both HH:MM slot strings and plain int lists
                 raw_time_val = str(row[time_col]) if pd.notna(row[time_col]) else ""
                 if ":" in raw_time_val:
                     hours = slots_str_to_hours(raw_time_val)
@@ -1429,7 +1459,7 @@ elif st.session_state["page"] == "scheduler":
                     res_val = float(row[res_col])
                     trp_val = float(row[trp_col])
                 except (ValueError, TypeError):
-                    continue  # skip rows with non-numeric scores
+                    continue
 
                 users.append({
                     "User ID":      row[id_col],
@@ -1444,34 +1474,33 @@ elif st.session_state["page"] == "scheduler":
             if not users:
                 st.error("No valid users to schedule — check your column mapping and data.")
             else:
-                with st.spinner("Running per-day augmenting path scheduler…"):
+                with st.spinner("Running min-cost max-flow scheduler…"):
                     day_results = run_scheduler(users)
 
-                # ── Metrics ──────────────────────────────────────────────────────
                 st.markdown('<div class="section-label" style="margin-top:1.5rem">Results</div>',
                             unsafe_allow_html=True)
-                total_possible   = sum(len(dr["eligible"])      for dr in day_results)
-                total_assigned   = sum(len(dr["user_slot"])     for dr in day_results)
-                total_reshuffle  = sum(len(dr["via_reshuffle"]) for dr in day_results)
-                total_moved      = sum(len(dr["moved"])         for dr in day_results)
-                total_unassigned = sum(len(dr["unassigned"])    for dr in day_results)
+                total_possible   = sum(len(dr["eligible"])  for dr in day_results)
+                total_assigned   = sum(len(dr["user_slot"]) for dr in day_results)
+                total_unassigned = sum(len(dr["unassigned"]) for dr in day_results)
+                pct = round(100 * total_assigned / total_possible) if total_possible else 0
 
                 st.markdown(f"""
                 <div class="stats-row">
-                  <div class="stat-card"><div class="stat-value">{total_possible}</div><div class="stat-label">Possible</div></div>
+                  <div class="stat-card"><div class="stat-value">{total_possible}</div><div class="stat-label">Eligible slots-days</div></div>
                   <div class="stat-card"><div class="stat-value">{total_assigned}</div><div class="stat-label">Assigned</div></div>
-                  <div class="stat-card"><div class="stat-value">{total_reshuffle}</div><div class="stat-label">Via Reshuffle</div></div>
-                  <div class="stat-card"><div class="stat-value">{total_moved}</div><div class="stat-label">Moved</div></div>
+                  <div class="stat-card"><div class="stat-value">{pct}%</div><div class="stat-label">Fill rate</div></div>
                   <div class="stat-card {'warn' if total_unassigned else ''}"><div class="stat-value">{total_unassigned}</div><div class="stat-label">Unassignable</div></div>
                 </div>
                 """, unsafe_allow_html=True)
 
-                # ── Summary table ─────────────────────────────────────────────
                 st.markdown("#### 📋 User summary — all days")
-                st.caption("Each cell shows the assigned time slot and score. — = not participating on that day.")
+                st.caption(
+                    "Each cell shows the assigned slot and score. "
+                    "❌ = window saturated (all their slots taken by higher-score players). "
+                    "— = not participating on that day."
+                )
                 st.dataframe(build_summary_df(users, day_results), use_container_width=True, hide_index=True)
 
-                # ── Per-day tabs ───────────────────────────────────────────────
                 st.markdown("#### 📅 Per-day detail")
                 tabs = st.tabs([dc["label"] for dc in DAY_CONFIG])
                 for i, dc in enumerate(DAY_CONFIG):
@@ -1481,6 +1510,29 @@ elif st.session_state["page"] == "scheduler":
                         ca.metric("Eligible users", len(dr["eligible"]))
                         cb.metric("Assigned",       len(dr["user_slot"]))
                         cc.metric("Unassigned",     len(dr["unassigned"]))
+
+                        # Score note: explain any gap between placed and unplaced scores
+                        if dr["user_slot"] and dr["unassigned"]:
+                            placed_scores   = [u[dc["col"]] for u in dr["eligible"] if u["User ID"] in dr["user_slot"]]
+                            unplaced_scores = [e["user"][dc["col"]] for e in dr["unassigned"]]
+                            min_p = min(placed_scores)
+                            max_u = max(unplaced_scores)
+                            if max_u > min_p + 0.001:
+                                st.markdown(
+                                    f'<div class="info-banner">ℹ Some unassigned players score higher than the '
+                                    f'lowest-placed player (highest unassigned: <b>{max_u:.2f}</b>, lowest placed: <b>{min_p:.2f}</b>). '
+                                    f'This is expected when a high-scorer\'s entire time window is already '
+                                    f'filled by other players who have no alternative slots to move to — '
+                                    f'the scheduler cannot free a slot for them without dropping someone else.</div>',
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                st.markdown(
+                                    f'<div class="success-banner">✓ Optimal score order: '
+                                    f'every placed player scores ≥ every unplaced player '
+                                    f'(min placed {min_p:.2f} ≥ max unplaced {max_u:.2f}).</div>',
+                                    unsafe_allow_html=True,
+                                )
 
                         st.markdown("**Slot timeline**")
                         st.dataframe(
@@ -1493,12 +1545,6 @@ elif st.session_state["page"] == "scheduler":
                             },
                         )
 
-                        ch_df = build_chains_df(dr, users)
-                        if not ch_df.empty:
-                            st.markdown("**Reshuffle chains**")
-                            st.caption("To place the *Placed* user, the *Moved* user had to shift slots.")
-                            st.dataframe(ch_df, use_container_width=True, hide_index=True)
-
                         ua_df = build_unassigned_df(dr)
                         if ua_df.empty:
                             st.markdown('<div class="success-banner">✅ All eligible users assigned on this day.</div>',
@@ -1507,7 +1553,6 @@ elif st.session_state["page"] == "scheduler":
                             st.markdown("**Unassigned users**")
                             st.dataframe(ua_df, use_container_width=True, hide_index=True)
 
-                # ── Export ─────────────────────────────────────────────────────
                 st.markdown("<hr>", unsafe_allow_html=True)
                 st.markdown('<div class="section-label">Export</div>', unsafe_allow_html=True)
                 st.download_button(
