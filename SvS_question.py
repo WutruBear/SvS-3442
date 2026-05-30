@@ -4,11 +4,7 @@ import re
 import io
 from datetime import datetime
 
-try:
-    import networkx as nx
-    HAS_NETWORKX = True
-except ImportError:
-    HAS_NETWORKX = False
+import networkx as nx
 
 try:
     import openpyxl
@@ -1305,14 +1301,6 @@ if st.session_state["page"] == "parser":
 # ═══════════════════════════════════════════════════════════════════════════════
 
 elif st.session_state["page"] == "scheduler":
-
-    if not HAS_NETWORKX:
-        st.markdown(
-            '<div class="error-banner">⚠ <b>networkx</b> is required for the scheduler. '
-            'Install it with: <code>pip install networkx</code></div>',
-            unsafe_allow_html=True,
-        )
-        st.stop()
 
     has_data = st.session_state["parsed_df"] is not None
     st.markdown(f"""
