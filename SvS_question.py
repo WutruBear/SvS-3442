@@ -1004,63 +1004,11 @@ if st.session_state["page"] == "parser":
 
     with col_tools:
         st.markdown('<div class="section-label">Input File</div>', unsafe_allow_html=True)
-        uploaded = st.file_uploader("Load .txt", type=["txt", "csv", "xlsx"], label_visibility="collapsed")
+        uploaded = st.file_uploader("Load .txt", type=["txt"], label_visibility="collapsed")
         if uploaded:
-            ext = uploaded.name.lower().split(".")[-1]
-        
-            # TXT behaves exactly as today
-            if ext == "txt":
-                content = uploaded.read().decode("utf-8")
-                st.session_state["raw_input"] = content
-        
-            # CSV import
-            elif ext == "csv":
-                df_import = pd.read_csv(uploaded)
-        
-                expected_cols = [
-                    "User ID",
-                    "Level",
-                    "Construction",
-                    "Research",
-                    "Troops",
-                    "FCs",
-                    "FC Shards",
-                    "Time UTC",
-                    "Days"
-                ]
-        
-                df_import = df_import.reindex(columns=expected_cols)
-        
-                st.session_state["parsed_df"] = df_import
-        
-                # Remove raw text because we're importing structured data
-                st.session_state["raw_input"] = ""
-        
-            # Excel import
-            elif ext == "xlsx":
-                df_import = pd.read_excel(uploaded)
-        
-                expected_cols = [
-                    "User ID",
-                    "Level",
-                    "Construction",
-                    "Research",
-                    "Troops",
-                    "FCs",
-                    "FC Shards",
-                    "Time UTC",
-                    "Days"
-                ]
-        
-                df_import = df_import.reindex(columns=expected_cols)
-        
-                st.session_state["parsed_df"] = df_import
-        
-                # Remove raw text because we're importing structured data
-                st.session_state["raw_input"] = ""
-        
+            content = uploaded.read().decode("utf-8")
+            st.session_state["raw_input"] = content
             st.rerun()
-        
         st.download_button(
             "💾 Save raw input",
             data=st.session_state["raw_input"].encode("utf-8"),
@@ -1441,12 +1389,27 @@ elif st.session_state["page"] == "scheduler":
         st.markdown('<div class="info-banner">ℹ Using built-in sample dataset (15 users).</div>',
                     unsafe_allow_html=True)
     else:
-        upload = st.file_uploader("Upload file", type=["csv", "xlsx"])
-        if upload:
-            raw_df = (pd.read_csv(upload) if upload.name.endswith(".csv")
-                      else pd.read_excel(upload))
-            st.markdown(f'<div class="success-banner">✓ Loaded {len(raw_df)} rows.</div>',
-                        unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
+        
+        if uploaded_file:
+            try:
+                # Load the file
+                if uploaded_file.name.endswith(".csv"):
+                    raw_df = pd.read_csv(uploaded_file)
+                else:
+                    raw_df = pd.read_excel(uploaded_file)
+                
+                st.markdown(f'<div class="success-banner">✓ Loaded {len(raw_df)} rows from {uploaded_file.name}</div>',
+                            unsafe_allow_html=True)
+                
+                # Show file preview
+                with st.expander("📋 Preview uploaded data", expanded=False):
+                    st.dataframe(raw_df.head(10), use_container_width=True)
+                    
+            except Exception as e:
+                st.markdown(f'<div class="error-banner">✗ Error loading file: {str(e)}</div>',
+                            unsafe_allow_html=True)
+                raw_df = None
 
     if raw_df is not None:
         with st.expander("Preview loaded data", expanded=False):
@@ -1454,10 +1417,30 @@ elif st.session_state["page"] == "scheduler":
 
         st.markdown('<div class="section-label" style="margin-top:1rem">Column mapping</div>',
                     unsafe_allow_html=True)
+        st.markdown('<span style="font-size:0.8rem; color:#9ba8bb;">Select which column from your data matches each field</span>',
+                    unsafe_allow_html=True)
+        
         cols = raw_df.columns.tolist()
+        
+        # Function to find best match for a column
+        def find_best_match(target_name, available_cols):
+            target_lower = target_name.lower()
+            # Exact match (case-insensitive)
+            for col in available_cols:
+                if col.lower() == target_lower:
+                    return col
+            # Partial match
+            for col in available_cols:
+                if target_lower in col.lower() or col.lower() in target_lower:
+                    return col
+            # Default to first column
+            return available_cols[0] if available_cols else None
+        
         def pick(label, default):
-            return st.selectbox(label, cols,
-                                index=cols.index(default) if default in cols else 0)
+            # Find best match for this column
+            best_match = find_best_match(default, cols)
+            default_idx = cols.index(best_match) if best_match in cols else 0
+            return st.selectbox(label, cols, index=default_idx)
 
         c1, c2, c3 = st.columns(3)
         with c1:
