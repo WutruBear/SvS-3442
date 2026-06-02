@@ -1007,59 +1007,59 @@ if st.session_state["page"] == "parser":
         uploaded = st.file_uploader("Load .txt", type=["txt", "csv", "xlsx"], label_visibility="collapsed")
         if uploaded:
             ext = uploaded.name.lower().split(".")[-1]
-
-        # TXT behaves exactly as today
-        if ext == "txt":
-            content = uploaded.read().decode("utf-8")
-            st.session_state["raw_input"] = content
-
-        # CSV import
-        elif ext == "csv":
-            df_import = pd.read_csv(uploaded)
-
-            expected_cols = [
-                "User ID",
-                "Level",
-                "Construction",
-                "Research",
-                "Troops",
-                "FCs",
-                "FC Shards",
-                "Time UTC",
-                "Days"
+        
+            # TXT behaves exactly as today
+            if ext == "txt":
+                content = uploaded.read().decode("utf-8")
+                st.session_state["raw_input"] = content
+        
+            # CSV import
+            elif ext == "csv":
+                df_import = pd.read_csv(uploaded)
+        
+                expected_cols = [
+                    "User ID",
+                    "Level",
+                    "Construction",
+                    "Research",
+                    "Troops",
+                    "FCs",
+                    "FC Shards",
+                    "Time UTC",
+                    "Days"
                 ]
-
-            df_import = df_import.reindex(columns=expected_cols)
-    
-            st.session_state["parsed_df"] = df_import
-    
-            # Remove raw text because we're importing structured data
-            st.session_state["raw_input"] = ""
-    
-        # Excel import
-        elif ext == "xlsx":
-            df_import = pd.read_excel(uploaded)
-    
-            expected_cols = [
-                "User ID",
-                "Level",
-                "Construction",
-                "Research",
-                "Troops",
-                "FCs",
-                "FC Shards",
-                "Time UTC",
-                "Days"
-            ]
-    
-            df_import = df_import.reindex(columns=expected_cols)
-    
-            st.session_state["parsed_df"] = df_import
-    
-            # Remove raw text because we're importing structured data
-            st.session_state["raw_input"] = ""
-
-        st.rerun()
+        
+                df_import = df_import.reindex(columns=expected_cols)
+        
+                st.session_state["parsed_df"] = df_import
+        
+                # Remove raw text because we're importing structured data
+                st.session_state["raw_input"] = ""
+        
+            # Excel import
+            elif ext == "xlsx":
+                df_import = pd.read_excel(uploaded)
+        
+                expected_cols = [
+                    "User ID",
+                    "Level",
+                    "Construction",
+                    "Research",
+                    "Troops",
+                    "FCs",
+                    "FC Shards",
+                    "Time UTC",
+                    "Days"
+                ]
+        
+                df_import = df_import.reindex(columns=expected_cols)
+        
+                st.session_state["parsed_df"] = df_import
+        
+                # Remove raw text because we're importing structured data
+                st.session_state["raw_input"] = ""
+        
+            st.rerun()
         
         st.download_button(
             "💾 Save raw input",
