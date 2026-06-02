@@ -294,84 +294,6 @@ DAY_CONFIG = [
 # PARSER HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def excel_or_csv_to_raw_text(uploaded_file):
-    """
-    Reads an uploaded Excel/CSV file, formats its columns properly to match
-    the expected parser syntax, and returns a unified string block.
-    """
-    try:
-        if uploaded_file.name.endswith(('.xlsx', '.xls')):
-            df = pd.read_excel(uploaded_file)
-        else:
-            df = pd.read_csv(uploaded_file)
-            
-        # Clean up column names to make matching flexible
-        df.columns = [str(c).strip() for c in df.columns]
-        
-        # Helper to safely locate columns by keyword
-        def find_col(keywords, default=""):
-            for k in keywords:
-                for col in df.columns:
-                    if k.lower() in col.lower():
-                        return col
-            return default
-
-        # Map spreadsheet columns to standard block structures
-        id_col = find_col(["user id", "player id", "id", "uid"])
-        lvl_col = find_col(["level", "lvl", "tier"])
-        const_col = find_col(["construction", "constr", "day 1"])
-        res_col = find_col(["research", "day 2"])
-        troop_col = find_col(["troops", "troop", "day 4"])
-        fc_col = find_col(["fc", "shard", "resource"])
-        time_col = find_col(["time", "utc", "slot"])
-        days_col = find_col(["days", "day(s)", "joining"])
-
-        blocks = []
-        for _, row in df.iterrows():
-            # Build individual record blocks replicating the standard format
-            lines = []
-            
-            # 1. User ID formatting
-            if id_col and pd.notna(row[id_col]):
-                val = str(row[id_col]).split('.')[0] # remove floating trailing zeros if any
-                lines.append(f"User ID: {val}")
-                
-            # 2. Level formatting
-            if lvl_col and pd.notna(row[lvl_col]):
-                lines.append(f"Level: {str(row[lvl_col]).strip()}")
-                
-            # 3. Construction formatting
-            if const_col and pd.notna(row[const_col]):
-                lines.append(f"CONSTRUCTION (Monday): {str(row[const_col]).strip()}")
-                
-            # 4. Research formatting
-            if res_col and pd.notna(row[res_col]):
-                lines.append(f"RESEARCH (Tuesday): {str(row[res_col]).strip()}")
-                
-            # 5. Troops formatting
-            if troop_col and pd.notna(row[troop_col]):
-                lines.append(f"TROOPS (Thursday): {str(row[troop_col]).strip()}")
-                
-            # 6. Resource formatting (Combines FC and Shards if available)
-            if fc_col and pd.notna(row[fc_col]):
-                lines.append(f"How many FCs and FC shards you have: {str(row[fc_col]).strip()}")
-                
-            # 7. Time UTC formatting
-            if time_col and pd.notna(row[time_col]):
-                lines.append(f"Desired time UTC (minimum 3 hour window): {str(row[time_col]).strip()}")
-                
-            # 8. Joined Days formatting
-            if days_col and pd.notna(row[days_col]):
-                lines.append(f"Desired day(s): {str(row[days_col]).strip()}")
-                
-            if lines:
-                blocks.append("\n".join(lines))
-                
-        return "\n\n".join(blocks)
-    except Exception as e:
-        st.error(f"Error reading file structure: {e}")
-        return None
-
 def normalize_duration(raw):
     if not raw:
         return "", LOW
@@ -1082,22 +1004,63 @@ if st.session_state["page"] == "parser":
 
     with col_tools:
         st.markdown('<div class="section-label">Input File</div>', unsafe_allow_html=True)
-        uploaded = st.file_uploader(
-            "Load Data (.txt, .csv, .xlsx)", 
-            type=["txt", "csv", "xlsx", "xls"], 
-            label_visibility="collapsed"
-        )
+        uploaded = st.file_uploader("Load .txt", type=["txt", "csv", "xlsx"], label_visibility="collapsed")
         if uploaded:
-            if uploaded.name.endswith('.txt'):
-                content = uploaded.read().decode("utf-8")
-                st.session_state["raw_input"] = content
-            else:
-                # Let pandas parse and structure standard sheets/spreadsheets cleanly
-                converted_text = excel_or_csv_to_raw_text(uploaded)
-                if converted_text:
-                    st.session_state["raw_input"] = converted_text
-            st.rerun()
-            
+            ext = uploaded.name.lower().split(".")[-1]
+
+        # TXT behaves exactly as today
+        if ext == "txt":
+            content = uploaded.read().decode("utf-8")
+            st.session_state["raw_input"] = content
+
+        # CSV import
+        elif ext == "csv":
+            df_import = pd.read_csv(uploaded)
+
+            expected_cols = [
+                "User ID",
+                "Level",
+                "Construction",
+                "Research",
+                "Troops",
+                "FCs",
+                "FC Shards",
+                "Time UTC",
+                "Days"
+                ]
+
+            df_import = df_import.reindex(columns=expected_cols)
+    
+            st.session_state["parsed_df"] = df_import
+    
+            # Remove raw text because we're importing structured data
+            st.session_state["raw_input"] = ""
+    
+        # Excel import
+        elif ext == "xlsx":
+            df_import = pd.read_excel(uploaded)
+    
+            expected_cols = [
+                "User ID",
+                "Level",
+                "Construction",
+                "Research",
+                "Troops",
+                "FCs",
+                "FC Shards",
+                "Time UTC",
+                "Days"
+            ]
+    
+            df_import = df_import.reindex(columns=expected_cols)
+    
+            st.session_state["parsed_df"] = df_import
+    
+            # Remove raw text because we're importing structured data
+            st.session_state["raw_input"] = ""
+
+        st.rerun()
+        
         st.download_button(
             "💾 Save raw input",
             data=st.session_state["raw_input"].encode("utf-8"),
