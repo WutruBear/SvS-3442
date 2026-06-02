@@ -291,95 +291,6 @@ DAY_CONFIG = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CSV/EXCEL IMPORT CONVERTER
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _convert_df_to_raw_input(df: pd.DataFrame) -> str:
-    """
-    Convert a DataFrame (from CSV/Excel) to the raw text format that the parser expects.
-    Expects columns: User ID, Level, Construction, Research, Troops, FCs, FC Shards, Time UTC, Days
-    (case-insensitive, partial matches also work)
-    """
-    # Normalize column names to our format
-    col_map = {}
-    df_cols_lower = {col.lower(): col for col in df.columns}
-    
-    required_fields = {
-        "user id": "User ID",
-        "level": "Level",
-        "construction": "Construction",
-        "research": "Research",
-        "troops": "Troops",
-        "fcs": "FCs",
-        "fc shards": "FC Shards",
-        "time utc": "Time UTC",
-        "days": "Days",
-    }
-    
-    for required, display_name in required_fields.items():
-        # Try exact match first, then partial match
-        if required in df_cols_lower:
-            col_map[display_name] = df_cols_lower[required]
-        else:
-            # Try to find a partial match
-            for col_lower, col_actual in df_cols_lower.items():
-                if required.replace(" ", "") in col_lower.replace(" ", ""):
-                    col_map[display_name] = col_actual
-                    break
-    
-    # Check if we found all required fields
-    if len(col_map) < len(required_fields):
-        return ""
-    
-    # Build raw input text
-    raw_parts = []
-    for _, row in df.iterrows():
-        block = []
-        
-        user_id = str(row[col_map["User ID"]]).strip()
-        if not user_id:
-            continue
-        
-        block.append(f"User ID: {user_id}")
-        
-        level = str(row[col_map["Level"]]).strip()
-        if level and level.lower() != "nan":
-            block.append(f"Level: {level}")
-        
-        construction = str(row[col_map["Construction"]]).strip()
-        if construction and construction.lower() != "nan":
-            block.append(f"CONSTRUCTION (Monday): {construction}")
-        
-        research = str(row[col_map["Research"]]).strip()
-        if research and research.lower() != "nan":
-            block.append(f"RESEARCH (Tuesday): {research}")
-        
-        troops = str(row[col_map["Troops"]]).strip()
-        if troops and troops.lower() != "nan":
-            block.append(f"TROOPS (Thursday): {troops}")
-        
-        fcs = str(row[col_map["FCs"]]).strip()
-        fc_shards = str(row[col_map["FC Shards"]]).strip()
-        if (fcs and fcs.lower() != "nan") or (fc_shards and fc_shards.lower() != "nan"):
-            fc_str = f"FC {fcs}" if (fcs and fcs.lower() != "nan") else ""
-            shards_str = f"shards {fc_shards}" if (fc_shards and fc_shards.lower() != "nan") else ""
-            block.append(f"How many FCs and FC shards you have: {fc_str} {shards_str}".strip())
-        
-        time_utc = str(row[col_map["Time UTC"]]).strip()
-        if time_utc and time_utc.lower() != "nan":
-            block.append(f"Desired time UTC (minimum 3 hour window): {time_utc}")
-        
-        days = str(row[col_map["Days"]]).strip()
-        if days and days.lower() != "nan":
-            block.append(f"Desired day(s): {days}")
-        
-        if block:
-            raw_parts.append("\n".join(block))
-    
-    return "\n\n".join(raw_parts)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # PARSER HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -942,12 +853,25 @@ def to_excel_schedule(users: list, day_results: list) -> io.BytesIO:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SESSION STATE INIT
+# SESSION STATE & BROWSER STORAGE INIT
 # ═══════════════════════════════════════════════════════════════════════════════
+from streamlit_local_storage import LocalStorage
+
+# 1. Initialize the local storage component
+local_storage = LocalStorage()
+
+# 2. Try to fetch any previously saved raw input from the user's browser
+browser_saved_data = local_storage.getItem("svs_raw_input")
+
+# 3. Determine the starting text: browser data first, fallback to SAMPLE_RAW
+if browser_saved_data and browser_saved_data.strip():
+    initial_text = browser_saved_data
+else:
+    initial_text = SAMPLE_RAW
 
 defaults = {
     "page":           "parser",
-    "raw_input":      SAMPLE_RAW,
+    "raw_input":      initial_text,
     "manual_records": [],
     "excluded_ids":   set(),
     "corrections":    {},
@@ -1085,43 +1009,27 @@ if st.session_state["page"] == "parser":
 
     col_input, col_tools = st.columns([4, 1])
 
+    # Define the save action
+    def save_to_browser():
+        local_storage.setItem("svs_raw_input", st.session_state["raw_input"])
+
     with col_input:
         st.markdown('<div class="section-label">Raw Input</div>', unsafe_allow_html=True)
         raw_text = st.text_area(
-            "raw", height=340, label_visibility="collapsed", key="raw_input",
+            "raw", 
+            height=340, 
+            label_visibility="collapsed", 
+            key="raw_input",
+            on_change=save_to_browser # <-- This auto-saves updates instantly
         )
 
     with col_tools:
         st.markdown('<div class="section-label">Input File</div>', unsafe_allow_html=True)
-        uploaded = st.file_uploader("Load file", type=["txt", "csv", "xlsx"], label_visibility="collapsed")
+        uploaded = st.file_uploader("Load .txt", type=["txt"], label_visibility="collapsed")
         if uploaded:
-            try:
-                if uploaded.name.endswith(".txt"):
-                    content = uploaded.read().decode("utf-8")
-                    st.session_state["raw_input"] = content
-                    st.rerun()
-                elif uploaded.name.endswith(".csv"):
-                    df_import = pd.read_csv(uploaded)
-                    content = _convert_df_to_raw_input(df_import)
-                    if content:
-                        st.session_state["raw_input"] = content
-                        st.markdown('<div class="success-banner">✓ CSV imported and converted to raw format.</div>', 
-                                  unsafe_allow_html=True)
-                        st.rerun()
-                    else:
-                        st.error("CSV columns don't match expected format. Expected: User ID, Level, Construction, Research, Troops, FCs, FC Shards, Time UTC, Days")
-                elif uploaded.name.endswith(".xlsx"):
-                    df_import = pd.read_excel(uploaded)
-                    content = _convert_df_to_raw_input(df_import)
-                    if content:
-                        st.session_state["raw_input"] = content
-                        st.markdown('<div class="success-banner">✓ Excel file imported and converted to raw format.</div>', 
-                                  unsafe_allow_html=True)
-                        st.rerun()
-                    else:
-                        st.error("Excel columns don't match expected format. Expected: User ID, Level, Construction, Research, Troops, FCs, FC Shards, Time UTC, Days")
-            except Exception as e:
-                st.error(f"Error reading file: {str(e)}")
+            content = uploaded.read().decode("utf-8")
+            st.session_state["raw_input"] = content
+            st.rerun()
         st.download_button(
             "💾 Save raw input",
             data=st.session_state["raw_input"].encode("utf-8"),
@@ -1131,7 +1039,7 @@ if st.session_state["page"] == "parser":
         )
 
     if not raw_text.strip():
-        st.info("Paste your player data in the text box above, or upload a .txt, .csv, or .xlsx file.")
+        st.info("Paste your player data in the text box above.")
         st.stop()
 
     records, parse_warnings = parse_input(raw_text)
