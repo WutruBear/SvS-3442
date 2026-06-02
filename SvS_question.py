@@ -291,6 +291,95 @@ DAY_CONFIG = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# CSV/EXCEL IMPORT CONVERTER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _convert_df_to_raw_input(df: pd.DataFrame) -> str:
+    """
+    Convert a DataFrame (from CSV/Excel) to the raw text format that the parser expects.
+    Expects columns: User ID, Level, Construction, Research, Troops, FCs, FC Shards, Time UTC, Days
+    (case-insensitive, partial matches also work)
+    """
+    # Normalize column names to our format
+    col_map = {}
+    df_cols_lower = {col.lower(): col for col in df.columns}
+    
+    required_fields = {
+        "user id": "User ID",
+        "level": "Level",
+        "construction": "Construction",
+        "research": "Research",
+        "troops": "Troops",
+        "fcs": "FCs",
+        "fc shards": "FC Shards",
+        "time utc": "Time UTC",
+        "days": "Days",
+    }
+    
+    for required, display_name in required_fields.items():
+        # Try exact match first, then partial match
+        if required in df_cols_lower:
+            col_map[display_name] = df_cols_lower[required]
+        else:
+            # Try to find a partial match
+            for col_lower, col_actual in df_cols_lower.items():
+                if required.replace(" ", "") in col_lower.replace(" ", ""):
+                    col_map[display_name] = col_actual
+                    break
+    
+    # Check if we found all required fields
+    if len(col_map) < len(required_fields):
+        return ""
+    
+    # Build raw input text
+    raw_parts = []
+    for _, row in df.iterrows():
+        block = []
+        
+        user_id = str(row[col_map["User ID"]]).strip()
+        if not user_id:
+            continue
+        
+        block.append(f"User ID: {user_id}")
+        
+        level = str(row[col_map["Level"]]).strip()
+        if level and level.lower() != "nan":
+            block.append(f"Level: {level}")
+        
+        construction = str(row[col_map["Construction"]]).strip()
+        if construction and construction.lower() != "nan":
+            block.append(f"CONSTRUCTION (Monday): {construction}")
+        
+        research = str(row[col_map["Research"]]).strip()
+        if research and research.lower() != "nan":
+            block.append(f"RESEARCH (Tuesday): {research}")
+        
+        troops = str(row[col_map["Troops"]]).strip()
+        if troops and troops.lower() != "nan":
+            block.append(f"TROOPS (Thursday): {troops}")
+        
+        fcs = str(row[col_map["FCs"]]).strip()
+        fc_shards = str(row[col_map["FC Shards"]]).strip()
+        if (fcs and fcs.lower() != "nan") or (fc_shards and fc_shards.lower() != "nan"):
+            fc_str = f"FC {fcs}" if (fcs and fcs.lower() != "nan") else ""
+            shards_str = f"shards {fc_shards}" if (fc_shards and fc_shards.lower() != "nan") else ""
+            block.append(f"How many FCs and FC shards you have: {fc_str} {shards_str}".strip())
+        
+        time_utc = str(row[col_map["Time UTC"]]).strip()
+        if time_utc and time_utc.lower() != "nan":
+            block.append(f"Desired time UTC (minimum 3 hour window): {time_utc}")
+        
+        days = str(row[col_map["Days"]]).strip()
+        if days and days.lower() != "nan":
+            block.append(f"Desired day(s): {days}")
+        
+        if block:
+            raw_parts.append("\n".join(block))
+    
+    return "\n\n".join(raw_parts)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # PARSER HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1004,11 +1093,35 @@ if st.session_state["page"] == "parser":
 
     with col_tools:
         st.markdown('<div class="section-label">Input File</div>', unsafe_allow_html=True)
-        uploaded = st.file_uploader("Load .txt", type=["txt"], label_visibility="collapsed")
+        uploaded = st.file_uploader("Load file", type=["txt", "csv", "xlsx"], label_visibility="collapsed")
         if uploaded:
-            content = uploaded.read().decode("utf-8")
-            st.session_state["raw_input"] = content
-            st.rerun()
+            try:
+                if uploaded.name.endswith(".txt"):
+                    content = uploaded.read().decode("utf-8")
+                    st.session_state["raw_input"] = content
+                    st.rerun()
+                elif uploaded.name.endswith(".csv"):
+                    df_import = pd.read_csv(uploaded)
+                    content = _convert_df_to_raw_input(df_import)
+                    if content:
+                        st.session_state["raw_input"] = content
+                        st.markdown('<div class="success-banner">✓ CSV imported and converted to raw format.</div>', 
+                                  unsafe_allow_html=True)
+                        st.rerun()
+                    else:
+                        st.error("CSV columns don't match expected format. Expected: User ID, Level, Construction, Research, Troops, FCs, FC Shards, Time UTC, Days")
+                elif uploaded.name.endswith(".xlsx"):
+                    df_import = pd.read_excel(uploaded)
+                    content = _convert_df_to_raw_input(df_import)
+                    if content:
+                        st.session_state["raw_input"] = content
+                        st.markdown('<div class="success-banner">✓ Excel file imported and converted to raw format.</div>', 
+                                  unsafe_allow_html=True)
+                        st.rerun()
+                    else:
+                        st.error("Excel columns don't match expected format. Expected: User ID, Level, Construction, Research, Troops, FCs, FC Shards, Time UTC, Days")
+            except Exception as e:
+                st.error(f"Error reading file: {str(e)}")
         st.download_button(
             "💾 Save raw input",
             data=st.session_state["raw_input"].encode("utf-8"),
@@ -1018,7 +1131,7 @@ if st.session_state["page"] == "parser":
         )
 
     if not raw_text.strip():
-        st.info("Paste your player data in the text box above.")
+        st.info("Paste your player data in the text box above, or upload a .txt, .csv, or .xlsx file.")
         st.stop()
 
     records, parse_warnings = parse_input(raw_text)
@@ -1389,27 +1502,12 @@ elif st.session_state["page"] == "scheduler":
         st.markdown('<div class="info-banner">ℹ Using built-in sample dataset (15 users).</div>',
                     unsafe_allow_html=True)
     else:
-        uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
-        
-        if uploaded_file:
-            try:
-                # Load the file
-                if uploaded_file.name.endswith(".csv"):
-                    raw_df = pd.read_csv(uploaded_file)
-                else:
-                    raw_df = pd.read_excel(uploaded_file)
-                
-                st.markdown(f'<div class="success-banner">✓ Loaded {len(raw_df)} rows from {uploaded_file.name}</div>',
-                            unsafe_allow_html=True)
-                
-                # Show file preview
-                with st.expander("📋 Preview uploaded data", expanded=False):
-                    st.dataframe(raw_df.head(10), use_container_width=True)
-                    
-            except Exception as e:
-                st.markdown(f'<div class="error-banner">✗ Error loading file: {str(e)}</div>',
-                            unsafe_allow_html=True)
-                raw_df = None
+        upload = st.file_uploader("Upload file", type=["csv", "xlsx"])
+        if upload:
+            raw_df = (pd.read_csv(upload) if upload.name.endswith(".csv")
+                      else pd.read_excel(upload))
+            st.markdown(f'<div class="success-banner">✓ Loaded {len(raw_df)} rows.</div>',
+                        unsafe_allow_html=True)
 
     if raw_df is not None:
         with st.expander("Preview loaded data", expanded=False):
@@ -1417,30 +1515,10 @@ elif st.session_state["page"] == "scheduler":
 
         st.markdown('<div class="section-label" style="margin-top:1rem">Column mapping</div>',
                     unsafe_allow_html=True)
-        st.markdown('<span style="font-size:0.8rem; color:#9ba8bb;">Select which column from your data matches each field</span>',
-                    unsafe_allow_html=True)
-        
         cols = raw_df.columns.tolist()
-        
-        # Function to find best match for a column
-        def find_best_match(target_name, available_cols):
-            target_lower = target_name.lower()
-            # Exact match (case-insensitive)
-            for col in available_cols:
-                if col.lower() == target_lower:
-                    return col
-            # Partial match
-            for col in available_cols:
-                if target_lower in col.lower() or col.lower() in target_lower:
-                    return col
-            # Default to first column
-            return available_cols[0] if available_cols else None
-        
         def pick(label, default):
-            # Find best match for this column
-            best_match = find_best_match(default, cols)
-            default_idx = cols.index(best_match) if best_match in cols else 0
-            return st.selectbox(label, cols, index=default_idx)
+            return st.selectbox(label, cols,
+                                index=cols.index(default) if default in cols else 0)
 
         c1, c2, c3 = st.columns(3)
         with c1:
