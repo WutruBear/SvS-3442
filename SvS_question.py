@@ -1201,7 +1201,7 @@ if st.session_state["page"] == "parser":
           </tr>
           <tr><td>User ID</td><td>Unique player number</td><td><code>1</code>, <code>12345</code></td></tr>
           <tr><td>Level</td><td>FC tier</td><td><code>FC1</code> … <code>FC5</code></td></tr>
-          <tr><td>Construction / Research / Troops</td><td>Boost duration in days</td>
+          <tr><td>Construction / Research / Troops</td><td>Speedups in days</td>
               <td><code>4d</code>, <code>3d 12h</code>, <code>7200min</code>, <code>5</code></td></tr>
           <tr><td>FCs / FC Shards</td><td>Resource counts</td>
               <td><code>FC 2693 shards 434</code>, <code>2,700 FCs</code></td></tr>
