@@ -1798,6 +1798,6 @@ elif st.session_state["page"] == "scheduler":
                 st.download_button(
                     label="📥 Download full schedule (.xlsx)",
                     data=to_excel_schedule(users, day_results),
-                    file_name="fc_schedule.xlsx",
+                    file_name="SvS_schedule.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
