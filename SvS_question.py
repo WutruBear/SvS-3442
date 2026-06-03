@@ -991,7 +991,7 @@ def run_scheduler(users: list) -> list:
     return [run_day(users, dc) for dc in DAY_CONFIG]
 
 
-def build_timeline_df(users: list, dr: dict) -> pd.DataFrame:
+def build_timeline_df(users: list, dr: dict, extra_col: str | None = None) -> pd.DataFrame:
     col = dr["col"]
     avail_slots = sorted({
         h * 2 + f
@@ -1004,25 +1004,27 @@ def build_timeline_df(users: list, dr: dict) -> pd.DataFrame:
         auid = dr["slot_occ"].get(slot)
         au   = next((u for u in users if u["User ID"] == auid), None)
         if au:
-            status         = "✅ Assigned"
             assigned_id    = f"ID{au['User ID']}"
             assigned_score = au[col]
         else:
-            status, assigned_id, assigned_score = "—", "empty", None
-        rows.append({
+            assigned_id, assigned_score = "empty", None
+        row = {
             "Time Slot": slot_label(slot),
             "Assigned":  assigned_id,
-            "Score":     f"{assigned_score:.2f}" if assigned_score is not None else "—",
-        })
+            "Speedups":  f"{assigned_score:.2f}" if assigned_score is not None else "—",
+        }
+        if extra_col:
+            row[extra_col] = str(int(au[extra_col])) if au and au.get(extra_col) not in (None, "", "—") else "—"
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
 def build_unassigned_df(dr: dict) -> pd.DataFrame:
     return pd.DataFrame([{
-        "User ID": f"ID{e['user']['User ID']}",
-        "Score":   f"{e['user'][dr['col']]:.2f}",
-        "Reason":  e["reason"],
-        "Detail":  e["detail"],
+        "User ID":  f"ID{e['user']['User ID']}",
+        "Speedups": f"{e['user'][dr['col']]:.2f}",
+        "Reason":   e["reason"],
+        "Detail":   e["detail"],
     } for e in dr["unassigned"]])
 
 
@@ -1571,21 +1573,21 @@ elif st.session_state["page"] == "scheduler":
         """, unsafe_allow_html=True)
 
     SCHEDULER_SAMPLE = pd.DataFrame([
-        {"User ID": 1,  "Level": "FC1", "Construction": 1.0,  "Research": 1.0,  "Troops": 1.0,  "Time UTC": "16:00,16:30,17:00,17:30,18:00,18:30", "Days": "1,2"},
-        {"User ID": 2,  "Level": "FC2", "Construction": 2.08, "Research": 2.0,  "Troops": 2.08, "Time UTC": "07:00,07:30,08:00,08:30,09:00,09:30,10:00,10:30,11:00,11:30,12:00,12:30,13:00,13:30,14:00,14:30,15:00,15:30,16:00,16:30,17:00,17:30,18:00,18:30,19:00,19:30,20:00,20:30", "Days": "2,4"},
-        {"User ID": 3,  "Level": "FC3", "Construction": 3.0,  "Research": 3.04, "Troops": 3.0,  "Time UTC": "00:00,00:30,10:00,10:30,11:00,11:30,23:00,23:30", "Days": "1,2"},
-        {"User ID": 4,  "Level": "FC4", "Construction": 4.0,  "Research": 4.17, "Troops": 4.0,  "Time UTC": "14:00,14:30,15:00,15:30,16:00,16:30", "Days": "1,2,4"},
-        {"User ID": 5,  "Level": "FC5", "Construction": 5.0,  "Research": 5.21, "Troops": 5.0,  "Time UTC": "00:00,00:30,01:00,01:30,02:00,02:30,03:00,03:30,09:00,09:30,20:00,20:30,21:00,21:30,22:00,22:30,23:00,23:30", "Days": "1,4"},
-        {"User ID": 6,  "Level": "FC2", "Construction": 2.5,  "Research": 2.3,  "Troops": 2.1,  "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
-        {"User ID": 7,  "Level": "FC3", "Construction": 3.3,  "Research": 3.1,  "Troops": 2.8,  "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
-        {"User ID": 8,  "Level": "FC1", "Construction": 1.1,  "Research": 0.9,  "Troops": 1.0,  "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
-        {"User ID": 9,  "Level": "FC2", "Construction": 2.0,  "Research": 1.8,  "Troops": 1.9,  "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
-        {"User ID": 10, "Level": "FC4", "Construction": 4.5,  "Research": 4.2,  "Troops": 4.3,  "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
-        {"User ID": 11, "Level": "FC3", "Construction": 3.7,  "Research": 3.5,  "Troops": 3.4,  "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1,2"},
-        {"User ID": 12, "Level": "FC2", "Construction": 2.2,  "Research": 2.4,  "Troops": 2.0,  "Time UTC": "06:00,06:30,07:00,07:30,08:00,08:30", "Days": "2,4"},
-        {"User ID": 13, "Level": "FC5", "Construction": 5.3,  "Research": 5.1,  "Troops": 5.2,  "Time UTC": "12:00,12:30,13:00,13:30,14:00,14:30", "Days": "1,2,4"},
-        {"User ID": 14, "Level": "FC1", "Construction": 1.3,  "Research": 1.1,  "Troops": 1.4,  "Time UTC": "22:00,22:30,23:00,23:30", "Days": "2"},
-        {"User ID": 15, "Level": "FC4", "Construction": 4.1,  "Research": 3.9,  "Troops": 4.0,  "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
+        {"User ID": 1,  "Level": "FC1", "Construction": 1.0,  "Research": 1.0,  "Troops": 1.0,  "FCs": 1200, "FC Shards": 210, "Time UTC": "16:00,16:30,17:00,17:30,18:00,18:30", "Days": "1,2"},
+        {"User ID": 2,  "Level": "FC2", "Construction": 2.08, "Research": 2.0,  "Troops": 2.08, "FCs": 2100, "FC Shards": 380, "Time UTC": "07:00,07:30,08:00,08:30,09:00,09:30,10:00,10:30,11:00,11:30,12:00,12:30,13:00,13:30,14:00,14:30,15:00,15:30,16:00,16:30,17:00,17:30,18:00,18:30,19:00,19:30,20:00,20:30", "Days": "2,4"},
+        {"User ID": 3,  "Level": "FC3", "Construction": 3.0,  "Research": 3.04, "Troops": 3.0,  "FCs": 2450, "FC Shards": 290, "Time UTC": "00:00,00:30,10:00,10:30,11:00,11:30,23:00,23:30", "Days": "1,2"},
+        {"User ID": 4,  "Level": "FC4", "Construction": 4.0,  "Research": 4.17, "Troops": 4.0,  "FCs": 2600, "FC Shards": 410, "Time UTC": "14:00,14:30,15:00,15:30,16:00,16:30", "Days": "1,2,4"},
+        {"User ID": 5,  "Level": "FC5", "Construction": 5.0,  "Research": 5.21, "Troops": 5.0,  "FCs": 2693, "FC Shards": 434, "Time UTC": "00:00,00:30,01:00,01:30,02:00,02:30,03:00,03:30,09:00,09:30,20:00,20:30,21:00,21:30,22:00,22:30,23:00,23:30", "Days": "1,4"},
+        {"User ID": 6,  "Level": "FC2", "Construction": 2.5,  "Research": 2.3,  "Troops": 2.1,  "FCs": 1950, "FC Shards": 310, "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
+        {"User ID": 7,  "Level": "FC3", "Construction": 3.3,  "Research": 3.1,  "Troops": 2.8,  "FCs": 2300, "FC Shards": 350, "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
+        {"User ID": 8,  "Level": "FC1", "Construction": 1.1,  "Research": 0.9,  "Troops": 1.0,  "FCs": 900,  "FC Shards": 150, "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
+        {"User ID": 9,  "Level": "FC2", "Construction": 2.0,  "Research": 1.8,  "Troops": 1.9,  "FCs": 1800, "FC Shards": 270, "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
+        {"User ID": 10, "Level": "FC4", "Construction": 4.5,  "Research": 4.2,  "Troops": 4.3,  "FCs": 2550, "FC Shards": 420, "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
+        {"User ID": 11, "Level": "FC3", "Construction": 3.7,  "Research": 3.5,  "Troops": 3.4,  "FCs": 2400, "FC Shards": 390, "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1,2"},
+        {"User ID": 12, "Level": "FC2", "Construction": 2.2,  "Research": 2.4,  "Troops": 2.0,  "FCs": 2050, "FC Shards": 330, "Time UTC": "06:00,06:30,07:00,07:30,08:00,08:30", "Days": "2,4"},
+        {"User ID": 13, "Level": "FC5", "Construction": 5.3,  "Research": 5.1,  "Troops": 5.2,  "FCs": 2700, "FC Shards": 440, "Time UTC": "12:00,12:30,13:00,13:30,14:00,14:30", "Days": "1,2,4"},
+        {"User ID": 14, "Level": "FC1", "Construction": 1.3,  "Research": 1.1,  "Troops": 1.4,  "FCs": 1100, "FC Shards": 190, "Time UTC": "22:00,22:30,23:00,23:30", "Days": "2"},
+        {"User ID": 15, "Level": "FC4", "Construction": 4.1,  "Research": 3.9,  "Troops": 4.0,  "FCs": 2580, "FC Shards": 415, "Time UTC": "16:00,16:30,17:00,17:30", "Days": "1"},
     ])
 
     st.markdown('<div class="section-label">Data source</div>', unsafe_allow_html=True)
@@ -1642,10 +1644,12 @@ elif st.session_state["page"] == "scheduler":
         with c1:
             id_col  = pick("User ID column",      "User ID")
             lvl_col = pick("Level column",         "Level")
+            fcs_col = pick("FCs column",           "FCs")
         with c2:
             con_col = pick("Construction column",  "Construction")
             res_col = pick("Research column",      "Research")
             trp_col = pick("Troops column",        "Troops")
+            shards_col = pick("FC Shards column",  "FC Shards")
         with c3:
             time_default = "Time UTC" if "Time UTC" in cols else ("Hours" if "Hours" in cols else cols[0])
             time_col  = pick("Time UTC / Hours column", time_default)
@@ -1680,12 +1684,24 @@ elif st.session_state["page"] == "scheduler":
                 except (ValueError, TypeError):
                     continue
 
+                try:
+                    fcs_val = int(float(row[fcs_col])) if pd.notna(row[fcs_col]) and str(row[fcs_col]).strip() not in ("", "—") else None
+                except (ValueError, TypeError):
+                    fcs_val = None
+
+                try:
+                    shards_val = int(float(row[shards_col])) if pd.notna(row[shards_col]) and str(row[shards_col]).strip() not in ("", "—") else None
+                except (ValueError, TypeError):
+                    shards_val = None
+
                 users.append({
                     "User ID":      row[id_col],
                     "Level":        str(row[lvl_col]),
                     "Construction": con_val,
                     "Research":     res_val,
                     "Troops":       trp_val,
+                    "FCs":          fcs_val,
+                    "FC Shards":    shards_val,
                     "hours":        hours,
                     "days":         parse_ints(row[days_col]),
                 })
@@ -1714,8 +1730,8 @@ elif st.session_state["page"] == "scheduler":
 
                 st.markdown("#### 📋 User summary — all days")
                 st.caption(
-                    "Each cell shows the assigned slot and score. "
-                    "❌ = window saturated (all their slots taken by higher-score players). "
+                    "Each cell shows the assigned slot and speedups. "
+                    "❌ = window saturated (all their slots taken by higher-speedup players). "
                     "— = not participating on that day."
                 )
                 st.dataframe(build_summary_df(users, day_results), use_container_width=True, hide_index=True)
@@ -1730,7 +1746,7 @@ elif st.session_state["page"] == "scheduler":
                         cb.metric("Assigned",       len(dr["user_slot"]))
                         cc.metric("Unassigned",     len(dr["unassigned"]))
 
-                        # Score note: explain any gap between placed and unplaced scores
+                        # Speedups note: explain any gap between placed and unplaced speedups
                         if dr["user_slot"] and dr["unassigned"]:
                             placed_scores   = [u[dc["col"]] for u in dr["eligible"] if u["User ID"] in dr["user_slot"]]
                             unplaced_scores = [e["user"][dc["col"]] for e in dr["unassigned"]]
@@ -1738,30 +1754,35 @@ elif st.session_state["page"] == "scheduler":
                             max_u = max(unplaced_scores)
                             if max_u > min_p + 0.001:
                                 st.markdown(
-                                    f'<div class="info-banner">ℹ Some unassigned players score higher than the '
+                                    f'<div class="info-banner">ℹ Some unassigned players have more speedups than the '
                                     f'lowest-placed player (highest unassigned: <b>{max_u:.2f}</b>, lowest placed: <b>{min_p:.2f}</b>). '
-                                    f'This is expected when a high-scorer\'s entire time window is already '
+                                    f'This is expected when a high-speedup player\'s entire time window is already '
                                     f'filled by other players who have no alternative slots to move to — '
                                     f'the scheduler cannot free a slot for them without dropping someone else.</div>',
                                     unsafe_allow_html=True,
                                 )
                             else:
                                 st.markdown(
-                                    f'<div class="success-banner">✓ Optimal score order: '
-                                    f'every placed player scores ≥ every unplaced player '
+                                    f'<div class="success-banner">✓ Optimal speedup order: '
+                                    f'every placed player has ≥ speedups than every unplaced player '
                                     f'(min placed {min_p:.2f} ≥ max unplaced {max_u:.2f}).</div>',
                                     unsafe_allow_html=True,
                                 )
 
                         st.markdown("**Slot timeline**")
+                        extra_col = "FCs" if dc["day"] == 1 else ("FC Shards" if dc["day"] == 2 else None)
+                        timeline_df = build_timeline_df(users, dr, extra_col=extra_col)
+                        col_cfg = {
+                            "Speedups":  st.column_config.TextColumn(width="small"),
+                            "Time Slot": st.column_config.TextColumn(width="medium"),
+                            "Assigned":  st.column_config.TextColumn(width="medium"),
+                        }
+                        if extra_col:
+                            col_cfg[extra_col] = st.column_config.TextColumn(extra_col, width="small")
                         st.dataframe(
-                            build_timeline_df(users, dr),
+                            timeline_df,
                             use_container_width=True,
-                            column_config={
-                                "Score":     st.column_config.TextColumn(width="small"),
-                                "Time Slot": st.column_config.TextColumn(width="medium"),
-                                "Assigned":  st.column_config.TextColumn(width="medium"),
-                            },
+                            column_config=col_cfg,
                         )
 
                         ua_df = build_unassigned_df(dr)
