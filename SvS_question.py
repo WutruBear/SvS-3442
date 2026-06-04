@@ -1759,6 +1759,26 @@ elif st.session_state["page"] == "scheduler":
                     stat_card(total_unassigned, "Unassignable", warn=bool(total_unassigned)),
                 )
 
+                 # --- 📊 NEW: GLOBAL AVAILABILITY CHART ---
+                st.markdown("#### 📊 Peak Availability")
+                st.caption("Total number of players available at each 30-minute time slot.")
+                
+                # Count available players per slot
+                slot_counts = {s: 0 for s in range(48)}
+                for u in users:
+                    for s in _user_slots(u):
+                        slot_counts[s] += 1
+                        
+                # Format for Streamlit chart
+                chart_df = pd.DataFrame([
+                    {"Time Slot": slot_label(s), "Players Available": count}
+                    for s, count in slot_counts.items()
+                ])
+                
+                # Display a cyan bar chart matching your theme
+                st.bar_chart(chart_df.set_index("Time Slot"), color="#00e5cc")
+                # ----------------------------------------- 
+
                 st.markdown("#### 📋 User summary — all days")
                 st.caption(
                     "Each cell shows the assigned slot and speedups. "
