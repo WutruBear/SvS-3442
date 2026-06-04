@@ -550,10 +550,15 @@ def parse_fc_shards(raw: str) -> tuple:
     text = raw.strip().lower()
     fc_val = shard_val = None
 
-    for pat in [r'shards?\s*[:\-]?\s*(\d+)', r'(\d+)\s*(?:fc\s+)?shards?']:
+    # 1. Update the regex to capture the punctuation (\d+(?:[.,]\d+)?)
+    for pat in [r'shards?\s*[:\-]?\s*(\d+(?:[.,]\d+)?)', r'(\d+(?:[.,]\d+)?)\s*(?:fc\s+)?shards?']:
         m = re.search(pat, text, re.I)
         if m:
-            shard_val = int(m.group(1))
+            try:
+                # 2. Now m.group(1) will be "1.900", allowing _parse_number_str to clean it up!
+                shard_val = int(float(_parse_number_str(m.group(1))))
+            except ValueError:
+                pass
             break
 
     for pat in [
