@@ -1544,14 +1544,79 @@ else:
         '<span class="topnav-badge" style="color:#5c6a82;background:#0e1117;border-color:#1e2533;">'
         'no data yet</span>'
     )
-
 st.markdown(f"""
-<div class="topnav">
-  <div class="topnav-brand">
-    <span class="topnav-brand-icon">&#9876;&#65039;</span>
-    <span class="topnav-brand-name">SvS #3442</span>
+<style>
+    /* Premium Topnav Overrides */
+    .topnav-premium {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: linear-gradient(145deg, rgba(12, 17, 32, 0.7) 0%, rgba(5, 7, 13, 0.9) 100%);
+        border: 1px solid var(--border);
+        border-top: 1px solid rgba(0, 229, 204, 0.4); /* Cyan accent top edge */
+        border-radius: 16px;
+        padding: 0.8rem 1.25rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 229, 204, 0.05);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+    }}
+    
+    .topnav-brand-premium {{
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+    }}
+    
+    .topnav-icon-premium {{
+        font-size: 1.2rem;
+        width: 38px;
+        height: 38px;
+        background: linear-gradient(135deg, rgba(0, 229, 204, 0.15), rgba(0, 229, 204, 0.02));
+        border: 1px solid rgba(0, 229, 204, 0.2);
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 10px rgba(0, 229, 204, 0.1);
+        text-shadow: 0 0 8px rgba(255,255,255,0.2);
+    }}
+    
+    .topnav-text-container {{
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }}
+    
+    .topnav-title-premium {{
+        font-size: 1.1rem;
+        font-weight: 800;
+        background: linear-gradient(90deg, #ffffff 0%, #d4dff0 50%, var(--accent) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: 0.03em;
+        line-height: 1.1;
+    }}
+    
+    .topnav-subtitle-premium {{
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        margin-bottom: 0.1rem;
+    }}
+</style>
+
+<div class="topnav-premium">
+  <div class="topnav-brand-premium">
+    <div class="topnav-icon-premium">&#9876;&#65039;</div>
+    <div class="topnav-text-container">
+      <span class="topnav-subtitle-premium">State vs State</span>
+      <span class="topnav-title-premium">Alliance #3442</span>
+    </div>
   </div>
-  <div style="display:flex;align-items:center;gap:0.75rem;">
+  <div style="display:flex;align-items:center;gap:1rem;">
     {badge_html}
   </div>
 </div>
