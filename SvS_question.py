@@ -1613,7 +1613,7 @@ st.markdown(f"""
     <div class="topnav-icon-premium">&#9876;&#65039;</div>
     <div class="topnav-text-container">
       <span class="topnav-subtitle-premium">State vs State</span>
-      <span class="topnav-title-premium">Alliance #3442</span>
+      <span class="topnav-title-premium">#3442</span>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:1rem;">
