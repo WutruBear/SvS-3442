@@ -1011,7 +1011,7 @@ def run_day(users: list, dc: dict) -> dict:
             continue
         all_u_slots = _user_slots(u)
         blockers    = {slot_occ[s] for s in all_u_slots if s in slot_occ}
-        names       = [f"ID{b}" for b in sorted(str(b) for b in blockers)]
+        names       = [f"{b}" for b in sorted(str(b) for b in blockers)]
 
         if u[col] <= min_top_48_score:
             unassigned.append({
@@ -1094,7 +1094,7 @@ def build_timeline_df(users: list, dr: dict, extra_col: str | None = None) -> pd
         auid = dr["slot_occ"].get(slot)
         au   = user_by_id.get(auid)
         if au:
-            assigned_id    = f"ID{au['User ID']}"
+            assigned_id    = f"{au['User ID']}"
             assigned_score = au[col]
         else:
             assigned_id, assigned_score = "empty", None
@@ -1117,7 +1117,7 @@ def build_timeline_df(users: list, dr: dict, extra_col: str | None = None) -> pd
 def build_unassigned_df(dr: dict) -> pd.DataFrame:
     """Build the unassigned-users DataFrame for a single day result."""
     return pd.DataFrame([{
-        "User ID":  f"ID{e['user']['User ID']}",
+        "User ID":  f"{e['user']['User ID']}",
         "Speedups": f"{e['user'][dr['col']]:.2f}",
         "Reason":   e["reason"],
         "Detail":   e["detail"],
@@ -1746,7 +1746,7 @@ elif st.session_state["page"] == "scheduler":
             shards_col = pick("FC Shards column",    "FC Shards")
         with c3:
             time_default = next(
-                (c for c in ("Time UTC", "Hours") if c in cols), cols[0]
+                (c for c in ("Time", "Hours") if c in cols), cols[0]
             )
             time_col = pick("Time UTC / Hours column", time_default)
             days_col = pick("Days column", "Days")
@@ -1868,11 +1868,7 @@ elif st.session_state["page"] == "scheduler":
                                     "info",
                                     f"ℹ Some unassigned players have more speedups than the "
                                     f"lowest-placed player (highest unassigned: <b>{max_u:.2f}</b>, "
-                                    f"lowest placed: <b>{min_p:.2f}</b>). "
-                                    f"This is expected when a high-speedup player's entire time window "
-                                    f"is already filled by other players who have no alternative slots "
-                                    f"to move to — the scheduler cannot free a slot for them without "
-                                    f"dropping someone else.",
+                                    f"lowest placed: <b>{min_p:.2f}</b>).",
                                 )
                             else:
                                 banner(
@@ -1907,8 +1903,7 @@ elif st.session_state["page"] == "scheduler":
                         banner(
                             "info",
                             "ℹ <b>Day 4 — VP</b> gives players who were <b>unassigned in Day 4 — MoE</b> "
-                            "a second-chance VP slot, scheduled by Troops score using the same "
-                            "MCMF algorithm. Only those unassigned players compete here.",
+                            "a second-chance VP slot.",
                         )
 
                         vp4_eligible   = vp4_result["eligible"]
