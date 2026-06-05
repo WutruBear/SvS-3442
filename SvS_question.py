@@ -429,10 +429,13 @@ Desired day(s): Mon, Thu
 """
 
 DAY_CONFIG = [
-    {"day": 1, "label": "Day 1 — Construction", "col": "Construction"},
-    {"day": 2, "label": "Day 2 — Research",     "col": "Research"},
-    {"day": 4, "label": "Day 4 — Troops",       "col": "Troops"},
+    {"day": 1, "label": "Day 1 — VP",  "col": "Construction"},
+    {"day": 2, "label": "Day 2 — VP",  "col": "Research"},
+    {"day": 4, "label": "Day 4 — MoE", "col": "Troops"},
 ]
+
+# Day 4 VP is a virtual 5th config: re-runs Day 4 but only for unassigned players
+DAY4_VP_CONFIG = {"day": 4, "label": "Day 4 — VP", "col": "Troops"}
 
 # Extra per-day column shown in the timeline view
 _DAY_EXTRA_COL = {1: "FCs", 2: "FC Shards", 4: None}
@@ -1044,6 +1047,32 @@ def run_scheduler(users: list) -> list:
     return [run_day(users, dc) for dc in DAY_CONFIG]
 
 
+def run_day4_vp(users: list, day4_result: dict) -> dict:
+    """Run a second VP scheduling pass for Day 4 using only unassigned players.
+
+    Players who were unassigned in the Day 4 MoE run (window saturated or low
+    score) get a second chance here.  Scheduling logic is identical to run_day
+    (MCMF over Troops score) but the eligible pool is restricted to those
+    unassigned IDs only.
+    """
+    unassigned_ids = {e["user"]["User ID"] for e in day4_result["unassigned"]}
+    if not unassigned_ids:
+        return {
+            "day": 4, "col": "Troops",
+            "slot_occ": {}, "user_slot": {},
+            "via_reshuffle": set(), "moved": {}, "chains": [],
+            "unassigned": [], "eligible": [],
+            "is_vp4": True,
+        }
+
+    # Restrict to users who were unassigned on Day 4 and have time windows
+    vp4_users = [u for u in users if u["User ID"] in unassigned_ids and 4 in u["days"]]
+
+    result = run_day(vp4_users, DAY4_VP_CONFIG)
+    result["is_vp4"] = True
+    return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DataFrame builders
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1095,7 +1124,7 @@ def build_unassigned_df(dr: dict) -> pd.DataFrame:
     } for e in dr["unassigned"]])
 
 
-def build_summary_df(users: list, day_results: list) -> pd.DataFrame:
+def build_summary_df(users: list, day_results: list, vp4_result: dict | None = None) -> pd.DataFrame:
     """Build the cross-day summary DataFrame."""
     day_map = {dr["day"]: dr for dr in day_results}
     rows = []
@@ -1111,15 +1140,33 @@ def build_summary_df(users: list, day_results: list) -> pd.DataFrame:
                 row[dc["label"]] = f"{slot_label(slot)}  [{u[col]:.2f}]"
             else:
                 row[dc["label"]] = f"❌ unassigned  [{u[col]:.2f}]"
+
+        # Day 4 — VP column: only meaningful for players unassigned in Day 4 MoE
+        if vp4_result is not None:
+            day4_dr = day_map.get(4)
+            col     = "Troops"
+            if 4 not in u["days"]:
+                row[DAY4_VP_CONFIG["label"]] = "—"
+            elif day4_dr and u["User ID"] in day4_dr["user_slot"]:
+                # Already placed in MoE — not eligible for VP
+                row[DAY4_VP_CONFIG["label"]] = "— (MoE placed)"
+            elif u["User ID"] in vp4_result["user_slot"]:
+                slot = vp4_result["user_slot"][u["User ID"]]
+                row[DAY4_VP_CONFIG["label"]] = f"{slot_label(slot)}  [{u[col]:.2f}]"
+            elif any(e["user"]["User ID"] == u["User ID"] for e in (day4_dr["unassigned"] if day4_dr else [])):
+                row[DAY4_VP_CONFIG["label"]] = f"❌ unassigned  [{u[col]:.2f}]"
+            else:
+                row[DAY4_VP_CONFIG["label"]] = "—"
+
         rows.append(row)
     return pd.DataFrame(rows)
 
 
-def to_excel_schedule(users: list, day_results: list) -> io.BytesIO:
+def to_excel_schedule(users: list, day_results: list, vp4_result: dict | None = None) -> io.BytesIO:
     """Export scheduler results to a multi-sheet xlsx file."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        build_summary_df(users, day_results).to_excel(
+        build_summary_df(users, day_results, vp4_result).to_excel(
             writer, sheet_name="Summary", index=False
         )
         for dr in day_results:
@@ -1133,6 +1180,14 @@ def to_excel_schedule(users: list, day_results: list) -> io.BytesIO:
                 ua.to_excel(
                     writer, sheet_name=f"Unassigned_Day{dc['day']}", index=False
                 )
+        # Day 4 — VP sheet
+        if vp4_result is not None and (vp4_result["user_slot"] or vp4_result["unassigned"]):
+            build_timeline_df(users, vp4_result).to_excel(
+                writer, sheet_name="Day_4_VP", index=False
+            )
+            ua_vp4 = build_unassigned_df(vp4_result)
+            if not ua_vp4.empty:
+                ua_vp4.to_excel(writer, sheet_name="Unassigned_Day4_VP", index=False)
     buf.seek(0)
     return buf
 
@@ -1743,6 +1798,9 @@ elif st.session_state["page"] == "scheduler":
             else:
                 with st.spinner("Running min-cost max-flow scheduler…"):
                     day_results = run_scheduler(users)
+                    # Day 4 — VP: second pass for players unassigned in Day 4 MoE
+                    day4_result = next((dr for dr in day_results if dr["day"] == 4), None)
+                    vp4_result  = run_day4_vp(users, day4_result) if day4_result else None
 
                 st.markdown('<div class="section-label" style="margin-top:1.5rem">Results</div>',
                             unsafe_allow_html=True)
@@ -1785,10 +1843,13 @@ elif st.session_state["page"] == "scheduler":
                     "❌ = window saturated (all their slots taken by higher-speedup players). "
                     "— = not participating on that day."
                 )
-                st.dataframe(build_summary_df(users, day_results), use_container_width=True, hide_index=True)
+                st.dataframe(build_summary_df(users, day_results, vp4_result), use_container_width=True, hide_index=True)
 
                 st.markdown("#### 📅 Per-day detail")
-                tabs = st.tabs([dc["label"] for dc in DAY_CONFIG])
+                tab_labels = [dc["label"] for dc in DAY_CONFIG]
+                if vp4_result is not None:
+                    tab_labels.append(DAY4_VP_CONFIG["label"])
+                tabs = st.tabs(tab_labels)
                 for i, dc in enumerate(DAY_CONFIG):
                     dr = day_results[i]
                     with tabs[i]:
@@ -1840,11 +1901,74 @@ elif st.session_state["page"] == "scheduler":
                             st.markdown("**Unassigned users**")
                             st.dataframe(ua_df, use_container_width=True, hide_index=True)
 
+                # ── Day 4 — VP tab ────────────────────────────────────────────────────
+                if vp4_result is not None:
+                    with tabs[len(DAY_CONFIG)]:
+                        banner(
+                            "info",
+                            "ℹ <b>Day 4 — VP</b> gives players who were <b>unassigned in Day 4 — MoE</b> "
+                            "a second-chance VP slot, scheduled by Troops score using the same "
+                            "MCMF algorithm. Only those unassigned players compete here.",
+                        )
+
+                        vp4_eligible   = vp4_result["eligible"]
+                        vp4_assigned   = vp4_result["user_slot"]
+                        vp4_unassigned = vp4_result["unassigned"]
+
+                        ca, cb, cc = st.columns(3)
+                        ca.metric("Eligible (unassigned from MoE)", len(vp4_eligible))
+                        cb.metric("Assigned VP slots",              len(vp4_assigned))
+                        cc.metric("Still unassigned",               len(vp4_unassigned))
+
+                        if not vp4_eligible:
+                            banner("success", "✅ No unassigned players from Day 4 — MoE. Nothing to schedule.")
+                        else:
+                            if vp4_assigned and vp4_unassigned:
+                                placed_scores   = [u["Troops"] for u in vp4_eligible if u["User ID"] in vp4_assigned]
+                                unplaced_scores = [e["user"]["Troops"] for e in vp4_unassigned]
+                                min_p = min(placed_scores)
+                                max_u = max(unplaced_scores)
+                                if max_u > min_p + 0.001:
+                                    banner(
+                                        "info",
+                                        f"ℹ Some unassigned players have more speedups than the "
+                                        f"lowest-placed player (highest unassigned: <b>{max_u:.2f}</b>, "
+                                        f"lowest placed: <b>{min_p:.2f}</b>). "
+                                        f"Their entire time window is saturated — the scheduler cannot "
+                                        f"free a slot without dropping someone else.",
+                                    )
+                                else:
+                                    banner(
+                                        "success",
+                                        f"✓ Optimal speedup order: every placed player has ≥ speedups "
+                                        f"than every unplaced player "
+                                        f"(min placed {min_p:.2f} ≥ max unplaced {max_u:.2f}).",
+                                    )
+
+                            st.markdown("**Slot timeline**")
+                            vp4_timeline_df = build_timeline_df(users, vp4_result)
+                            st.dataframe(
+                                vp4_timeline_df,
+                                use_container_width=True,
+                                column_config={
+                                    "Speedups":  st.column_config.TextColumn(width="small"),
+                                    "Time Slot": st.column_config.TextColumn(width="medium"),
+                                    "Assigned":  st.column_config.TextColumn(width="medium"),
+                                },
+                            )
+
+                            vp4_ua_df = build_unassigned_df(vp4_result)
+                            if vp4_ua_df.empty:
+                                banner("success", "✅ All eligible players assigned a VP slot.")
+                            else:
+                                st.markdown("**Still unassigned after VP pass**")
+                                st.dataframe(vp4_ua_df, use_container_width=True, hide_index=True)
+
                 st.markdown("<hr>", unsafe_allow_html=True)
                 st.markdown('<div class="section-label">Export</div>', unsafe_allow_html=True)
                 st.download_button(
                     label="📥 Download full schedule (.xlsx)",
-                    data=to_excel_schedule(users, day_results),
+                    data=to_excel_schedule(users, day_results, vp4_result),
                     file_name="SvS_schedule.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
