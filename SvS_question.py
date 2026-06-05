@@ -22,7 +22,7 @@ st.set_page_config(page_title="SvS #3442 tool", page_icon="⚔️", layout="wide
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Rajdhani:wght@500;600;700&display=swap');
 
     :root {
         --bg:        #080b11;
@@ -86,22 +86,96 @@ st.markdown("""
     }
 
     .topnav {
+        position: relative; overflow: hidden;
         display: flex; align-items: center; justify-content: space-between;
-        background: var(--bg-1); border: 1px solid var(--border);
-        border-radius: 14px; padding: 0.65rem 1.1rem;
-        margin-bottom: 1.5rem; gap: 0.75rem;
+        background: linear-gradient(135deg, #0a0e18 0%, #0d1220 50%, #080c16 100%);
+        border: 1px solid #1e2d48;
+        border-radius: 16px; padding: 0;
+        margin-bottom: 1.5rem; gap: 0;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(74,158,255,0.08);
     }
-    .topnav-brand { display: flex; align-items: center; gap: 0.55rem; flex-shrink: 0; }
-    .topnav-brand-icon { font-size: 1.1rem; line-height: 1; }
-    .topnav-brand-name { font-size: 0.9rem; font-weight: 700; color: #dde6f0; letter-spacing: -0.01em; }
+    .topnav::before {
+        content: ''; position: absolute; inset: 0;
+        background: linear-gradient(90deg,
+            rgba(74,158,255,0.06) 0%,
+            transparent 40%,
+            transparent 60%,
+            rgba(74,158,255,0.03) 100%);
+        pointer-events: none;
+    }
+    .topnav::after {
+        content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+        background: linear-gradient(90deg,
+            transparent 0%, rgba(74,158,255,0.4) 30%,
+            rgba(74,158,255,0.6) 50%,
+            rgba(74,158,255,0.4) 70%, transparent 100%);
+    }
+
+    .topnav-inner {
+        position: relative; z-index: 1;
+        display: flex; align-items: stretch; justify-content: space-between;
+        width: 100%; padding: 0;
+    }
+    .topnav-brand {
+        display: flex; align-items: center; gap: 0; flex-shrink: 0;
+        padding: 0.75rem 1.4rem;
+        border-right: 1px solid rgba(74,158,255,0.12);
+    }
+    .topnav-sword-wrap {
+        display: flex; align-items: center; justify-content: center;
+        width: 36px; height: 36px; flex-shrink: 0; margin-right: 0.9rem;
+        position: relative;
+    }
+    .topnav-sword-wrap svg { width: 28px; height: 28px; }
+    .topnav-text-block { display: flex; flex-direction: column; gap: 0.05rem; }
+    .topnav-title {
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 1.35rem; font-weight: 700; line-height: 1;
+        color: #e8f0fc; letter-spacing: 0.06em;
+        text-shadow: 0 0 20px rgba(74,158,255,0.3);
+    }
+    .topnav-title span { color: #4a9eff; }
+    .topnav-sub {
+        font-size: 0.6rem; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.18em; color: #3a5070; line-height: 1;
+    }
+
+    .topnav-right {
+        display: flex; align-items: center; gap: 0.65rem;
+        padding: 0.75rem 1.2rem;
+    }
     .topnav-badge {
-        font-size: 0.72rem; font-weight: 600; color: var(--green);
-        background: var(--green-bg); border: 1px solid #1a3d2a;
-        border-radius: 20px; padding: 0.18rem 0.65rem; white-space: nowrap;
+        font-size: 0.68rem; font-weight: 700;
+        font-family: 'Rajdhani', sans-serif; letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--green); background: rgba(62,201,122,0.08);
+        border: 1px solid rgba(62,201,122,0.25);
+        border-radius: 6px; padding: 0.28rem 0.8rem; white-space: nowrap;
     }
-    @media (max-width: 480px) {
-        .topnav-brand-name { font-size: 0.82rem; }
-        .topnav-badge { font-size: 0.68rem; padding: 0.14rem 0.5rem; }
+    .topnav-badge.dim {
+        color: #3a4e65; background: rgba(20,28,44,0.5);
+        border-color: rgba(30,45,72,0.8);
+    }
+    .topnav-divider {
+        width: 1px; height: 20px; background: rgba(74,158,255,0.12); flex-shrink: 0;
+    }
+    .topnav-id-chip {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.65rem; font-weight: 500;
+        color: #3a5070; letter-spacing: 0.05em;
+        padding: 0.2rem 0.5rem;
+        background: rgba(10,14,24,0.8);
+        border: 1px solid rgba(30,45,72,0.6);
+        border-radius: 4px;
+    }
+
+    @media (max-width: 520px) {
+        .topnav-brand { padding: 0.65rem 1rem; }
+        .topnav-title { font-size: 1.1rem; }
+        .topnav-right { padding: 0.65rem 0.85rem; gap: 0.45rem; }
+        .topnav-id-chip { display: none; }
+        .topnav-sword-wrap { width: 28px; height: 28px; margin-right: 0.65rem; }
+        .topnav-sword-wrap svg { width: 22px; height: 22px; }
     }
 
     .stepper {
@@ -1225,22 +1299,60 @@ for _k, _v in _SESSION_DEFAULTS.items():
 if st.session_state["parsed_df"] is not None:
     n           = len(st.session_state["parsed_df"])
     badge_html  = (
-        f'<span class="topnav-badge">&#10003; {n} player{"s" if n != 1 else ""} parsed</span>'
+        f'<span class="topnav-badge">&#10003;&nbsp;{n} player{"s" if n != 1 else ""} loaded</span>'
     )
 else:
     badge_html  = (
-        '<span class="topnav-badge" style="color:#5c6a82;background:#0e1117;border-color:#1e2533;">'
-        'no data yet</span>'
+        '<span class="topnav-badge dim">awaiting data</span>'
     )
 
 st.markdown(f"""
 <div class="topnav">
-  <div class="topnav-brand">
-    <span class="topnav-brand-icon">&#9876;&#65039;</span>
-    <span class="topnav-brand-name">SvS #3442</span>
-  </div>
-  <div style="display:flex;align-items:center;gap:0.75rem;">
-    {badge_html}
+  <div class="topnav-inner">
+    <div class="topnav-brand">
+      <div class="topnav-sword-wrap">
+        <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="blade" x1="14" y1="2" x2="14" y2="22" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#a8c8ff"/>
+              <stop offset="55%" stop-color="#4a9eff"/>
+              <stop offset="100%" stop-color="#1e4880"/>
+            </linearGradient>
+            <linearGradient id="glow" x1="14" y1="2" x2="14" y2="22" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#4a9eff" stop-opacity="0.6"/>
+              <stop offset="100%" stop-color="#4a9eff" stop-opacity="0"/>
+            </linearGradient>
+            <filter id="blur2">
+              <feGaussianBlur stdDeviation="1.5"/>
+            </filter>
+          </defs>
+          <!-- glow behind blade -->
+          <path d="M14 2 L15.2 18 L14 22 L12.8 18 Z" fill="url(#glow)" filter="url(#blur2)" opacity="0.8"/>
+          <!-- blade -->
+          <path d="M14 2 L15 18 L14 22 L13 18 Z" fill="url(#blade)"/>
+          <!-- crossguard -->
+          <rect x="8" y="17.5" width="12" height="2" rx="1" fill="#3a6090"/>
+          <rect x="8" y="17.5" width="12" height="2" rx="1" fill="url(#blade)" opacity="0.5"/>
+          <!-- handle -->
+          <rect x="12.5" y="19.5" width="3" height="5" rx="1.2" fill="#263852"/>
+          <rect x="12.5" y="19.5" width="3" height="5" rx="1.2" fill="url(#blade)" opacity="0.2"/>
+          <!-- pommel -->
+          <circle cx="14" cy="25.5" r="1.4" fill="#304060"/>
+          <circle cx="14" cy="25.5" r="1.4" fill="url(#blade)" opacity="0.4"/>
+          <!-- blade edge shine -->
+          <line x1="14.3" y1="3" x2="14.7" y2="17" stroke="white" stroke-width="0.3" opacity="0.4"/>
+        </svg>
+      </div>
+      <div class="topnav-text-block">
+        <div class="topnav-title">SvS <span>#3442</span></div>
+        <div class="topnav-sub">Alliance Battle Tool</div>
+      </div>
+    </div>
+    <div class="topnav-right">
+      <span class="topnav-id-chip">v2</span>
+      <div class="topnav-divider"></div>
+      {badge_html}
+    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
