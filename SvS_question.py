@@ -2036,7 +2036,7 @@ elif st.session_state["page"] == "scheduler":
             shards_col = pick("FC Shards column",    "FC Shards")
         with c3:
             time_default = next(
-                (c for c in ("Time", "Hours") if c in cols), cols[0]
+                (c for c in ("Time", "Hours", "Time UTC") if c in cols), cols[0]
             )
             time_col = pick("Time UTC / Hours column", time_default)
             days_col = pick("Days column", "Days")
