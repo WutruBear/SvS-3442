@@ -1007,35 +1007,42 @@ def parse_block(block: str) -> dict:
     return r
 
 
-def parse_input(text: str) -> tuple[list, list]:
+def parse_input(text: str) -> tuple[list, list, dict]:
     """Split raw text into player blocks and parse each one.
 
     Returns:
-        (records, warnings) where records is a list of dicts and warnings is a
-        list of human-readable issue strings.
+        (records, warnings, duplicates) where:
+          - records   : list of dicts, one per unique User ID (first occurrence kept
+                        until the caller resolves duplicates)
+          - warnings  : list of human-readable issue strings (non-duplicate problems)
+          - duplicates: {uid: [rec, rec, ...]} for every User ID that appeared > once
     """
     parts = re.split(r'(?=User\s*ID\s*[:\-]?\s*\d)', text.strip(), flags=re.I)
     # Drop any leading fragment that has no User ID (e.g. a blank preamble line)
     parts = [p.strip() for p in parts if p.strip() and re.search(r'User\s*ID\s*[:\-]?\s*\d', p, re.I)]
 
-    records: list  = []
-    warnings: list = []
-    seen_ids: dict = {}
+    all_parsed: list = []
+    warnings:   list = []
 
     for i, part in enumerate(parts, 1):
         rec = parse_block(part)
         if not rec["User ID"]:
             warnings.append(f"Block {i}: Could not find User ID — skipped.")
             continue
-        uid = rec["User ID"]
-        if uid in seen_ids:
-            warnings.append(f"Duplicate User ID {uid} in blocks {seen_ids[uid]} and {i} — both kept.")
-        seen_ids[uid] = i
         rec["_raw_block"] = part
         rec["_manual"]    = False
-        records.append(rec)
+        all_parsed.append(rec)
 
-    return records, warnings
+    # Group by User ID
+    by_uid: dict = {}
+    for rec in all_parsed:
+        by_uid.setdefault(rec["User ID"], []).append(rec)
+
+    duplicates = {uid: recs for uid, recs in by_uid.items() if len(recs) > 1}
+    # records = first occurrence for each uid (caller will replace resolved ones)
+    records = [recs[0] for recs in by_uid.values()]
+
+    return records, warnings, duplicates
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1217,52 +1224,76 @@ def run_day(users: list, dc: dict) -> dict:
 
     eligible = sorted(eligible, key=lambda u: u[col], reverse=True)
 
-    # ── 2. Build slot universe ─────────────────────────────────────────────────
-    all_slots = sorted({h * 2 + f for u in eligible for h in u["hours"] for f in (0, 1)})
-    slot_set  = set(all_slots)
+    # ── 2. Apply manual slot overrides ────────────────────────────────────────
+    # Pinned users are pre-placed; the solver only runs on the rest.
+    pinned_slot_occ:  dict = {}   # slot → uid
+    pinned_user_slot: dict = {}   # uid  → slot
+    free_eligible:    list = []
 
-    # ── 3. Edge costs ──────────────────────────────────────────────────────────
-    # cost_i = (max_score − score_i) * SCALE + i
-    # • Lower cost  ↔  higher score  ↔  preferred by min-cost solver
-    # • The +i tiebreak ensures deterministic results for identical scores.
+    for u in eligible:
+        uid     = u["User ID"]
+        uid_str = str(uid)
+        override_slot = u.get("_slot_overrides", {}).get(day)
+        if override_slot is not None and 0 <= override_slot < 48:
+            # If two pins claim the same slot the later one (lower score) is ignored
+            if override_slot not in pinned_slot_occ:
+                pinned_slot_occ[override_slot]  = uid
+                pinned_user_slot[uid]           = override_slot
+            else:
+                free_eligible.append(u)   # pin conflict — fall through to solver
+        else:
+            free_eligible.append(u)
+
+    # ── 3. Build slot universe (from all eligible, including pinned) ───────────
+    all_slots = sorted({h * 2 + f for u in eligible for h in u["hours"] for f in (0, 1)})
+    # Also include pinned slots even if they fall outside normal availability
+    for s in pinned_slot_occ:
+        if s not in all_slots:
+            all_slots = sorted(set(all_slots) | {s})
+    slot_set = set(all_slots)
+
+    # ── 4. Edge costs (for free_eligible only) ─────────────────────────────────
     SCALE  = 10_000
     max_s  = eligible[0][col] if eligible else 1.0
-    costs  = [int((max_s - u[col]) * SCALE) + i for i, u in enumerate(eligible)]
+    free_costs = [int((max_s - u[col]) * SCALE) + i for i, u in enumerate(free_eligible)]
 
-    # ── 4. Build the flow network ──────────────────────────────────────────────
-    S, T         = "S", "T"
-    user_nodes   = [f"U{i}"     for i in range(len(eligible))]
-    slot_node    = {s: f"SL{s}" for s in all_slots}
+    # ── 5. Build flow network (excluding already-pinned slots) ─────────────────
+    available_slots = sorted(s for s in all_slots if s not in pinned_slot_occ)
 
-    G = nx.DiGraph()
-    for i in range(len(eligible)):
-        G.add_edge(S, user_nodes[i], capacity=1, weight=0)
+    slot_occ:  dict = dict(pinned_slot_occ)
+    user_slot: dict = dict(pinned_user_slot)
 
-    for i, u in enumerate(eligible):
-        u_slots = _user_slots(u) & slot_set
-        for s in u_slots:
-            G.add_edge(user_nodes[i], slot_node[s], capacity=1, weight=costs[i])
+    if free_eligible and available_slots:
+        S, T       = "S", "T"
+        user_nodes = [f"U{i}" for i in range(len(free_eligible))]
+        slot_node  = {s: f"SL{s}" for s in available_slots}
 
-    for s in all_slots:
-        G.add_edge(slot_node[s], T, capacity=1, weight=0)
+        G = nx.DiGraph()
+        for i in range(len(free_eligible)):
+            G.add_edge(S, user_nodes[i], capacity=1, weight=0)
 
-    # ── 5. Solve ───────────────────────────────────────────────────────────────
-    flow_dict = nx.max_flow_min_cost(G, S, T)
+        for i, u in enumerate(free_eligible):
+            u_slots = _user_slots(u) & set(available_slots)
+            for s in u_slots:
+                G.add_edge(user_nodes[i], slot_node[s], capacity=1, weight=free_costs[i])
 
-    # ── 6. Extract assignments ─────────────────────────────────────────────────
-    slot_occ:  dict = {}
-    user_slot: dict = {}
+        for s in available_slots:
+            G.add_edge(slot_node[s], T, capacity=1, weight=0)
 
-    for i, u in enumerate(eligible):
-        uid = u["User ID"]
-        un  = user_nodes[i]
-        for s in all_slots:
-            if flow_dict.get(un, {}).get(slot_node[s], 0) == 1:
-                slot_occ[s]    = uid
-                user_slot[uid] = s
-                break
+        # ── 6. Solve ───────────────────────────────────────────────────────────
+        flow_dict = nx.max_flow_min_cost(G, S, T)
 
-    # ── 7. Build unassigned list with blocker detail ───────────────────────────
+        # ── 7. Extract assignments ─────────────────────────────────────────────
+        for i, u in enumerate(free_eligible):
+            uid = u["User ID"]
+            un  = user_nodes[i]
+            for s in available_slots:
+                if flow_dict.get(un, {}).get(slot_node[s], 0) == 1:
+                    slot_occ[s]    = uid
+                    user_slot[uid] = s
+                    break
+
+    # ── 8. Build unassigned list with blocker detail ───────────────────────────
     # Find the minimum score among all assigned users (or +inf if nobody was placed).
     min_assigned_score = min(
         (u[col] for u in eligible if u["User ID"] in user_slot),
@@ -1475,14 +1506,20 @@ browser_saved_data = local_storage.getItem("svs_raw_input")
 initial_text       = browser_saved_data if browser_saved_data and browser_saved_data.strip() else SAMPLE_RAW
 
 _SESSION_DEFAULTS = {
-    "page":           "parser",
-    "raw_input":      initial_text,
-    "manual_records": [],
-    "excluded_ids":   set(),
-    "corrections":    {},
-    "_last_hash":     None,
-    "_clipboard_csv": None,
-    "parsed_df":      None,
+    "page":              "parser",
+    "raw_input":         initial_text,
+    "manual_records":    [],
+    "excluded_ids":      set(),
+    "corrections":       {},
+    "_last_hash":        None,
+    "_clipboard_csv":    None,
+    "parsed_df":         None,
+    # Duplicate resolution: {uid: index} — which occurrence to keep (0-based)
+    "dup_choices":       {},
+    # Manual slot overrides for the scheduler: {uid: {day: slot_index or None}}
+    "slot_overrides":    {},
+    # Run history for changelog: list of {label, summary_df, user_slot_map}
+    "run_history":       [],
 }
 for _k, _v in _SESSION_DEFAULTS.items():
     if _k not in st.session_state:
@@ -1655,9 +1692,10 @@ if st.session_state["page"] == "parser":
         st.info("Paste your player data in the text box above.")
         st.stop()
 
-    records, parse_warnings = parse_input(raw_text)
-    input_hash               = hash(raw_text)
+    records, parse_warnings, duplicates = parse_input(raw_text)
+    input_hash = hash(raw_text)
 
+    # ── Reset corrections when input changes ──────────────────────────────────
     if st.session_state["_last_hash"] != input_hash:
         new_corr = {
             rec["User ID"]: {f: rec[f] for f in DISPLAY_FIELDS if f != "User ID"}
@@ -1669,6 +1707,48 @@ if st.session_state["page"] == "parser":
                 new_corr[uid] = {f: mrec.get(f, "") for f in DISPLAY_FIELDS if f != "User ID"}
         st.session_state["corrections"] = new_corr
         st.session_state["_last_hash"]  = input_hash
+        # Clear stale dup choices for UIDs no longer duplicated
+        st.session_state["dup_choices"] = {
+            uid: v for uid, v in st.session_state["dup_choices"].items()
+            if uid in duplicates
+        }
+
+    # ── Duplicate resolution UI ───────────────────────────────────────────────
+    if duplicates:
+        banner(
+            "alert",
+            f"<b>{len(duplicates)} duplicate User ID{'s' if len(duplicates) > 1 else ''} found.</b> "
+            "Choose which entry to keep for each.",
+        )
+        for uid, dup_recs in duplicates.items():
+            with st.expander(f"⚠ Duplicate — User ID {uid}  ({len(dup_recs)} entries)", expanded=True):
+                option_labels = []
+                for idx, rec in enumerate(dup_recs):
+                    parts_preview = ", ".join(
+                        f"{f}: {rec.get(f, '—')}"
+                        for f in ("Construction", "Research", "Troops", "Time UTC", "Days")
+                        if rec.get(f)
+                    )
+                    option_labels.append(f"Entry {idx + 1}  —  {parts_preview}")
+
+                current_choice = st.session_state["dup_choices"].get(uid, 0)
+                chosen = st.radio(
+                    "Keep which entry?",
+                    options=list(range(len(dup_recs))),
+                    format_func=lambda i, _labels=option_labels: _labels[i],
+                    index=current_choice,
+                    key=f"dup_{uid}",
+                    horizontal=False,
+                )
+                st.session_state["dup_choices"][uid] = chosen
+
+        # Apply choices: replace the first-occurrence record with the chosen one
+        choice_map = st.session_state["dup_choices"]
+        for i, rec in enumerate(records):
+            uid = rec["User ID"]
+            if uid in duplicates:
+                chosen_idx = choice_map.get(uid, 0)
+                records[i] = duplicates[uid][chosen_idx]
 
     for mrec in st.session_state["manual_records"]:
         uid = mrec["User ID"]
@@ -1701,7 +1781,8 @@ if st.session_state["page"] == "parser":
 
     stat_row(
         stat_card(len(visible_records), "Players"),
-        stat_card(n_flagged, "Need Review", warn=bool(n_flagged)),
+        stat_card(n_flagged,            "Need Review",   warn=bool(n_flagged)),
+        stat_card(len(duplicates),      "Duplicates",    warn=bool(duplicates)),
         stat_card(len(st.session_state["excluded_ids"]), "Excluded"),
     )
 
@@ -2053,6 +2134,60 @@ elif st.session_state["page"] == "scheduler":
             time window is saturated by even-higher-scorers with no alternative slots.
         """)
 
+        # ── Manual slot overrides ─────────────────────────────────────────────
+        with st.expander("📌 Manual slot overrides", expanded=bool(st.session_state["slot_overrides"])):
+            st.caption(
+                "Pin one or more players to a specific slot before the solver runs. "
+                "The solver will treat these pins as pre-filled and work around them. "
+                "Leave a day blank to let the solver decide freely."
+            )
+            override_uid = st.selectbox(
+                "Select player to pin",
+                options=["— none —"] + [str(row[id_col]) for _, row in raw_df.iterrows()],
+                key="override_uid_select",
+            )
+            if override_uid != "— none —":
+                st.markdown(f"**Pinning User {override_uid}**")
+                ov_cols = st.columns(len(DAY_CONFIG))
+                for ci, dc in enumerate(DAY_CONFIG):
+                    with ov_cols[ci]:
+                        all_slot_labels = ["(solver decides)"] + [slot_label(s) for s in range(48)]
+                        current_pin = st.session_state["slot_overrides"].get(override_uid, {}).get(dc["day"])
+                        current_idx = (current_pin + 1) if current_pin is not None else 0
+                        sel = st.selectbox(
+                            dc["label"],
+                            options=all_slot_labels,
+                            index=current_idx,
+                            key=f"ov_{override_uid}_{dc['day']}",
+                        )
+                        uid_ovs = st.session_state["slot_overrides"].setdefault(override_uid, {})
+                        if sel == "(solver decides)":
+                            uid_ovs.pop(dc["day"], None)
+                        else:
+                            uid_ovs[dc["day"]] = all_slot_labels.index(sel) - 1
+
+            # Show and clear existing pins
+            active_overrides = {
+                uid: days for uid, days in st.session_state["slot_overrides"].items() if days
+            }
+            if active_overrides:
+                st.markdown("**Active pins:**")
+                pin_rows = []
+                for uid, days in active_overrides.items():
+                    for day, slot in days.items():
+                        dc_label = next((d["label"] for d in DAY_CONFIG if d["day"] == day), f"Day {day}")
+                        pin_rows.append({"User ID": uid, "Day": dc_label, "Pinned slot": slot_label(slot)})
+                st.dataframe(pd.DataFrame(pin_rows), use_container_width=True, hide_index=True)
+                if st.button("🗑 Clear all pins", key="clear_pins"):
+                    st.session_state["slot_overrides"] = {}
+                    st.rerun()
+
+        run_label_input = st.text_input(
+            "Run label (optional)",
+            placeholder="e.g. 'After fixing User 42 window'",
+            key="run_label_input",
+        )
+
         if st.button("⚡ Run scheduler", type="primary", use_container_width=False):
             def _safe_int(row, col_name):
                 """Safely coerce a DataFrame cell to int, returning None on failure."""
@@ -2089,11 +2224,45 @@ elif st.session_state["page"] == "scheduler":
             if not users:
                 st.error("No valid users to schedule — check your column mapping and data.")
             else:
+                # Apply manual overrides: inject pins into slot_occ before the solver
+                # by adding a synthetic "already placed" signal via hours restriction.
+                # Strategy: for pinned users on a given day, replace their hours with
+                # only the pinned hour so MCMF is forced to that slot.
+                overrides = st.session_state["slot_overrides"]
+                users_for_run = []
+                for u in users:
+                    uid_str = str(u["User ID"])
+                    if uid_str not in overrides:
+                        users_for_run.append(u)
+                        continue
+                    u_copy = dict(u)
+                    # We'll apply per-day overrides inside run_day via a patched copy.
+                    # Store the override map on the user dict for run_day to read.
+                    u_copy["_slot_overrides"] = overrides[uid_str]
+                    users_for_run.append(u_copy)
+
                 with st.spinner("Running min-cost max-flow scheduler…"):
-                    day_results = run_scheduler(users)
+                    day_results = run_scheduler(users_for_run)
                     # Day 4 — VP: second pass for players unassigned in Day 4 MoE
                     day4_result = next((dr for dr in day_results if dr["day"] == 4), None)
-                    vp4_result  = run_day4_vp(users, day4_result) if day4_result else None
+                    vp4_result  = run_day4_vp(users_for_run, day4_result) if day4_result else None
+
+                # ── Save to run history ────────────────────────────────────────
+                run_ts    = datetime.utcnow().strftime("%H:%M UTC")
+                run_label = run_label_input.strip() or run_ts
+                # Snapshot: {uid: {day: slot_index}} for every result
+                snap: dict = {}
+                for dr in day_results:
+                    for uid, slot in dr["user_slot"].items():
+                        snap.setdefault(str(uid), {})[dr["day"]] = slot
+                if vp4_result:
+                    for uid, slot in vp4_result["user_slot"].items():
+                        snap.setdefault(str(uid), {})["4vp"] = slot
+
+                history = st.session_state["run_history"]
+                history.append({"label": run_label, "snap": snap, "ts": run_ts})
+                # Keep last 5 runs
+                st.session_state["run_history"] = history[-5:]
 
                 st.markdown('<div class="section-label" style="margin-top:1.5rem">Results</div>',
                             unsafe_allow_html=True)
@@ -2110,13 +2279,79 @@ elif st.session_state["page"] == "scheduler":
                     stat_card(total_unassigned, "Unassignable", warn=bool(total_unassigned)),
                 )
 
-                 # --- 📊 NEW: GLOBAL AVAILABILITY CHART ---
+                # ── Changelog / diff view ──────────────────────────────────────
+                if len(st.session_state["run_history"]) >= 2:
+                    history = st.session_state["run_history"]
+                    with st.expander("🔄 Changelog — diff vs previous run", expanded=False):
+                        compare_options = [h["label"] for h in history[:-1]]
+                        compare_label   = st.selectbox(
+                            "Compare current run against:",
+                            options=compare_options,
+                            index=len(compare_options) - 1,
+                            key="changelog_compare_select",
+                        )
+                        prev_snap = next(h["snap"] for h in history if h["label"] == compare_label)
+                        curr_snap = history[-1]["snap"]
+
+                        day_keys = {dc["day"]: dc["label"] for dc in DAY_CONFIG}
+                        day_keys["4vp"] = DAY4_VP_CONFIG["label"]
+
+                        all_uids = sorted(set(prev_snap) | set(curr_snap), key=str)
+                        diff_rows = []
+                        for uid in all_uids:
+                            prev_days = prev_snap.get(uid, {})
+                            curr_days = curr_snap.get(uid, {})
+                            all_days  = set(prev_days) | set(curr_days)
+                            for day in sorted(all_days, key=lambda d: (str(d))):
+                                p = prev_days.get(day)
+                                c = curr_days.get(day)
+                                if p == c:
+                                    continue
+                                diff_rows.append({
+                                    "User ID":  uid,
+                                    "Day":      day_keys.get(day, f"Day {day}"),
+                                    "Previous": slot_label(p) if p is not None else "unassigned",
+                                    "Current":  slot_label(c) if c is not None else "unassigned",
+                                    "Change":   (
+                                        "✅ now assigned"   if p is None and c is not None else
+                                        "❌ now unassigned" if p is not None and c is None else
+                                        "↔ moved slot"
+                                    ),
+                                })
+
+                        if not diff_rows:
+                            banner("success", "✓ No changes — this run produced identical assignments.")
+                        else:
+                            n_better = sum(1 for r in diff_rows if r["Change"] == "✅ now assigned")
+                            n_worse  = sum(1 for r in diff_rows if r["Change"] == "❌ now unassigned")
+                            n_moved  = sum(1 for r in diff_rows if r["Change"] == "↔ moved slot")
+                            banner(
+                                "info",
+                                f"<b>{len(diff_rows)} change(s)</b> vs <em>{compare_label}</em>: "
+                                f"{n_better} newly assigned &nbsp;·&nbsp; "
+                                f"{n_worse} newly unassigned &nbsp;·&nbsp; "
+                                f"{n_moved} slot change(s).",
+                            )
+                            st.dataframe(
+                                pd.DataFrame(diff_rows),
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "User ID":  st.column_config.TextColumn(width="small"),
+                                    "Day":      st.column_config.TextColumn(width="medium"),
+                                    "Previous": st.column_config.TextColumn(width="medium"),
+                                    "Current":  st.column_config.TextColumn(width="medium"),
+                                    "Change":   st.column_config.TextColumn(width="medium"),
+                                },
+                            )
+
+                 # --- 📊 GLOBAL AVAILABILITY CHART ---
                 st.markdown("#### 📊 Peak Availability")
                 st.caption("Total number of players available at each 30-minute time slot.")
                 
                 # Count available players per slot
                 slot_counts = {s: 0 for s in range(48)}
-                for u in users:
+                for u in users_for_run:
                     for s in _user_slots(u):
                         slot_counts[s] += 1
                         
@@ -2128,7 +2363,6 @@ elif st.session_state["page"] == "scheduler":
                 
                 # Display a cyan bar chart matching your theme
                 st.bar_chart(chart_df.set_index("Time Slot"), color="#00e5cc")
-                # ----------------------------------------- 
 
                 st.markdown("#### 📋 User summary — all days")
                 st.caption(
@@ -2136,7 +2370,7 @@ elif st.session_state["page"] == "scheduler":
                     "❌ = window saturated (all their slots taken by higher-speedup players). "
                     "— = not participating on that day."
                 )
-                st.dataframe(build_summary_df(users, day_results, vp4_result), use_container_width=True, hide_index=True)
+                st.dataframe(build_summary_df(users_for_run, day_results, vp4_result), use_container_width=True, hide_index=True)
 
                 st.markdown("#### 📅 Per-day detail")
                 tab_labels = [dc["label"] for dc in DAY_CONFIG]
@@ -2173,7 +2407,7 @@ elif st.session_state["page"] == "scheduler":
 
                         st.markdown("**Slot timeline**")
                         extra_col = _DAY_EXTRA_COL.get(dc["day"])
-                        timeline_df = build_timeline_df(users, dr, extra_col=extra_col)
+                        timeline_df = build_timeline_df(users_for_run, dr, extra_col=extra_col)
                         col_cfg = {
                             "Speedups":  st.column_config.TextColumn(width="small"),
                             "Time Slot": st.column_config.TextColumn(width="medium"),
@@ -2234,7 +2468,7 @@ elif st.session_state["page"] == "scheduler":
                                     )
 
                             st.markdown("**Slot timeline**")
-                            vp4_timeline_df = build_timeline_df(users, vp4_result)
+                            vp4_timeline_df = build_timeline_df(users_for_run, vp4_result)
                             st.dataframe(
                                 vp4_timeline_df,
                                 use_container_width=True,
@@ -2256,7 +2490,7 @@ elif st.session_state["page"] == "scheduler":
                 st.markdown('<div class="section-label">Export</div>', unsafe_allow_html=True)
                 st.download_button(
                     label="📥 Download full schedule (.xlsx)",
-                    data=to_excel_schedule(users, day_results, vp4_result),
+                    data=to_excel_schedule(users_for_run, day_results, vp4_result),
                     file_name="SvS_schedule.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
