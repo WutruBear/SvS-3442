@@ -728,11 +728,26 @@ def render_stepper(steps: list[tuple[str, str]]) -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _parse_number_str(val: str) -> str:
-    """Normalise a numeric string with thousand-separators to a plain decimal."""
-    if "." in val and len(val.split(".")[-1]) == 3:
+    """Normalise a numeric string with thousand-separators to a plain decimal.
+
+    Handles:
+      "1.900"  → "1900"   (dot as thousands sep)
+      "1,900"  → "1900"   (comma as thousands sep)
+      "4.17"   → "4.17"   (dot as decimal — NOT stripped)
+      "1,2"    → "1.2"    (comma as decimal sep → convert to dot)
+    """
+    # Dot-as-thousands: only when the fractional part is exactly 3 digits
+    # AND there is no additional decimal point (e.g. "1.900" but not "4.175")
+    dot_parts = val.split(".")
+    if len(dot_parts) == 2 and len(dot_parts[-1]) == 3 and dot_parts[-1].isdigit() and dot_parts[0].isdigit():
         return val.replace(".", "")
-    if "," in val and len(val.split(",")[-1]) == 3:
+
+    # Comma-as-thousands: same logic
+    comma_parts = val.split(",")
+    if len(comma_parts) == 2 and len(comma_parts[-1]) == 3 and comma_parts[-1].isdigit() and comma_parts[0].isdigit():
         return val.replace(",", "")
+
+    # Comma-as-decimal separator (e.g. "1,2" or "4,5")
     return val.replace(",", ".")
 
 
@@ -858,11 +873,15 @@ def normalize_time_utc(raw: str) -> tuple:
         end   = (end   // 30) * 30
         if start == end:
             continue
-        # Walk 30-minute steps, wrapping midnight
+        # Walk 30-minute steps, wrapping midnight.
+        # Guard against infinite loop: cross-midnight ranges are valid (e.g. 22:00-02:00)
+        # but we must cap iterations to at most 48 steps (full 24 hours).
         t = start
-        while t != end:
+        steps = 0
+        while t != end and steps < 48:
             slots.add(t)
             t = (t + 30) % (24 * 60)
+            steps += 1
 
     text_no_ranges = re.sub(range_pat, " ", text)
     for m in re.finditer(rf'\b({TIME_PAT})\s*(?:utc)?\b', text_no_ranges):
@@ -996,7 +1015,8 @@ def parse_input(text: str) -> tuple[list, list]:
         list of human-readable issue strings.
     """
     parts = re.split(r'(?=User\s*ID\s*[:\-]?\s*\d)', text.strip(), flags=re.I)
-    parts = [p.strip() for p in parts if p.strip()]
+    # Drop any leading fragment that has no User ID (e.g. a blank preamble line)
+    parts = [p.strip() for p in parts if p.strip() and re.search(r'User\s*ID\s*[:\-]?\s*\d', p, re.I)]
 
     records: list  = []
     warnings: list = []
@@ -1066,7 +1086,8 @@ def build_excel(df_export: pd.DataFrame, flagged_cells: set) -> bytes:
 
     # Auto-fit column widths
     for ci, col in enumerate(cols, 1):
-        max_len = max(len(str(col)), *[len(str(r)) for r in df_export[col].fillna("")])
+        cell_lengths = [len(str(v)) for v in df_export[col].fillna("")]
+        max_len = max([len(str(col))] + cell_lengths, default=len(str(col)))
         ws.column_dimensions[get_column_letter(ci)].width = min(max_len + 4, 42)
 
     ws.freeze_panes = "A2"
@@ -1081,7 +1102,12 @@ def build_excel(df_export: pd.DataFrame, flagged_cells: set) -> bytes:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def slots_str_to_hours(slots_str: str) -> list[int]:
-    """Convert parser Time UTC output ("14:00,14:30,15:00") to unique integer hours."""
+    """Convert parser Time UTC output ("14:00,14:30,15:00") to unique integer hours.
+
+    Each "HH:MM" token contributes its hour component.  The result is a sorted,
+    deduplicated list of integer hours (0-23) that the scheduler uses to build
+    the set of available 30-minute slots via _user_slots().
+    """
     if not slots_str:
         return []
     hours: set[int] = set()
@@ -1089,11 +1115,15 @@ def slots_str_to_hours(slots_str: str) -> list[int]:
         tok = tok.strip()
         if ":" in tok:
             try:
-                hours.add(int(tok.split(":")[0]))
+                h = int(tok.split(":")[0])
+                if 0 <= h <= 23:
+                    hours.add(h)
             except ValueError:
                 pass
         elif tok.isdigit():
-            hours.add(int(tok))
+            h = int(tok)
+            if 0 <= h <= 23:
+                hours.add(h)
     return sorted(hours)
 
 
@@ -1111,11 +1141,16 @@ def parse_ints(s) -> list[int]:
 
 
 def slot_label(slot: int) -> str:
-    """Return a human-readable 30-minute window label, e.g. '14:00 – 14:30'."""
-    h, half = divmod(slot, 2)
-    end_h   = (h + 1) % 24 if half else h
-    end_m   = "00" if half else "30"
-    return f"{h:02d}:{'30' if half else '00'} – {end_h:02d}:{end_m}"
+    """Return a human-readable 30-minute window label, e.g. '14:00 – 14:30'.
+
+    Args:
+        slot: Integer index 0-47 (slot 0 = 00:00-00:30, slot 1 = 00:30-01:00, …).
+    """
+    start_min = slot * 30          # minutes since midnight
+    end_min   = start_min + 30     # always 30 min later (may exceed 1440 for slot 47, but display wraps)
+    sh, sm = divmod(start_min, 60)
+    eh, em = divmod(end_min % (24 * 60), 60)
+    return f"{sh:02d}:{sm:02d} – {eh:02d}:{em:02d}"
 
 
 def _user_slots(user: dict) -> set[int]:
@@ -1228,8 +1263,11 @@ def run_day(users: list, dc: dict) -> dict:
                 break
 
     # ── 7. Build unassigned list with blocker detail ───────────────────────────
-    top_48_scores    = [u[col] for u in eligible[:48]]
-    min_top_48_score = top_48_scores[-1] if top_48_scores else float("-inf")
+    # Find the minimum score among all assigned users (or +inf if nobody was placed).
+    min_assigned_score = min(
+        (u[col] for u in eligible if u["User ID"] in user_slot),
+        default=float("inf"),
+    )
 
     unassigned = []
     for u in eligible:
@@ -1240,11 +1278,11 @@ def run_day(users: list, dc: dict) -> dict:
         blockers    = {slot_occ[s] for s in all_u_slots if s in slot_occ}
         names       = [f"{b}" for b in sorted(str(b) for b in blockers)]
 
-        if u[col] <= min_top_48_score:
+        if u[col] < min_assigned_score:
             unassigned.append({
                 "user":   u,
                 "reason": "not enough speedups",
-                "detail": "-",
+                "detail": f"Score {u[col]:.2f} < minimum placed {min_assigned_score:.2f}.",
             })
         else:
             unassigned.append({
@@ -1346,14 +1384,21 @@ def build_unassigned_df(dr: dict) -> pd.DataFrame:
     return pd.DataFrame([{
         "User ID":  f"{e['user']['User ID']}",
         "Speedups": f"{e['user'][dr['col']]:.2f}",
-        "Reason":   e["reason"],
-        "Detail":   e["detail"],
+        "Reason":   e.get("reason", ""),
+        "Detail":   e.get("detail", "—"),
     } for e in dr["unassigned"]])
 
 
 def build_summary_df(users: list, day_results: list, vp4_result: dict | None = None) -> pd.DataFrame:
     """Build the cross-day summary DataFrame."""
     day_map = {dr["day"]: dr for dr in day_results}
+
+    # Pre-build sets for O(1) lookups inside the loop
+    day4_dr = day_map.get(4)
+    day4_unassigned_ids: set = (
+        {e["user"]["User ID"] for e in day4_dr["unassigned"]} if day4_dr else set()
+    )
+
     rows = []
     for u in users:
         row = {"User ID": u["User ID"], "Level": u["Level"]}
@@ -1370,8 +1415,7 @@ def build_summary_df(users: list, day_results: list, vp4_result: dict | None = N
 
         # Day 4 — VP column: only meaningful for players unassigned in Day 4 MoE
         if vp4_result is not None:
-            day4_dr = day_map.get(4)
-            col     = "Troops"
+            col = "Troops"
             if 4 not in u["days"]:
                 row[DAY4_VP_CONFIG["label"]] = "—"
             elif day4_dr and u["User ID"] in day4_dr["user_slot"]:
@@ -1380,7 +1424,7 @@ def build_summary_df(users: list, day_results: list, vp4_result: dict | None = N
             elif u["User ID"] in vp4_result["user_slot"]:
                 slot = vp4_result["user_slot"][u["User ID"]]
                 row[DAY4_VP_CONFIG["label"]] = f"{slot_label(slot)}  [{u[col]:.2f}]"
-            elif any(e["user"]["User ID"] == u["User ID"] for e in (day4_dr["unassigned"] if day4_dr else [])):
+            elif u["User ID"] in day4_unassigned_ids:
                 row[DAY4_VP_CONFIG["label"]] = f"❌ unassigned  [{u[col]:.2f}]"
             else:
                 row[DAY4_VP_CONFIG["label"]] = "—"
@@ -2008,6 +2052,14 @@ elif st.session_state["page"] == "scheduler":
         """)
 
         if st.button("⚡ Run scheduler", type="primary", use_container_width=False):
+            def _safe_int(row, col_name):
+                """Safely coerce a DataFrame cell to int, returning None on failure."""
+                val = row[col_name]
+                try:
+                    return int(float(val)) if pd.notna(val) and str(val).strip() not in ("", "—") else None
+                except (ValueError, TypeError):
+                    return None
+
             users = []
             for _, row in raw_df.iterrows():
                 raw_time_val = str(row[time_col]) if pd.notna(row[time_col]) else ""
@@ -2020,21 +2072,14 @@ elif st.session_state["page"] == "scheduler":
                 except (ValueError, TypeError):
                     continue
 
-                def _safe_int(col_name):
-                    val = row[col_name]
-                    try:
-                        return int(float(val)) if pd.notna(val) and str(val).strip() not in ("", "—") else None
-                    except (ValueError, TypeError):
-                        return None
-
                 users.append({
                     "User ID":      row[id_col],
                     "Level":        str(row[lvl_col]),
                     "Construction": con_val,
                     "Research":     res_val,
                     "Troops":       trp_val,
-                    "FCs":          _safe_int(fcs_col),
-                    "FC Shards":    _safe_int(shards_col),
+                    "FCs":          _safe_int(row, fcs_col),
+                    "FC Shards":    _safe_int(row, shards_col),
                     "hours":        hours,
                     "days":         parse_ints(row[days_col]),
                 })
