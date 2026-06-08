@@ -1637,9 +1637,11 @@ if st.session_state["page"] == "parser":
 
     with col_tools:
         st.markdown('<div class="section-label">Input File</div>', unsafe_allow_html=True)
-        uploaded = st.file_uploader("Load .txt", type=["txt"], label_visibility="collapsed")
+        uploaded = st.file_uploader("Load .txt", type=["txt"], label_visibility="collapsed",
+                                    accept_multiple_files=True)
         if uploaded:
-            st.session_state["raw_input"] = uploaded.read().decode("utf-8")
+            merged = "\n".join(f.read().decode("utf-8") for f in uploaded)
+            st.session_state["raw_input"] = merged
             st.rerun()
         st.download_button(
             "💾 Save raw input",
@@ -2036,7 +2038,7 @@ elif st.session_state["page"] == "scheduler":
             shards_col = pick("FC Shards column",    "FC Shards")
         with c3:
             time_default = next(
-                (c for c in ("Time", "Hours", "Time UTC") if c in cols), cols[0]
+                (c for c in ("Time", "Hours") if c in cols), cols[0]
             )
             time_col = pick("Time UTC / Hours column", time_default)
             days_col = pick("Days column", "Days")
