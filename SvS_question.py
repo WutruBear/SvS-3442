@@ -2098,6 +2098,63 @@ elif st.session_state["page"] == "scheduler":
         with st.expander("Preview loaded data", expanded=False):
             st.dataframe(raw_df, use_container_width=True)
 
+    # ── Manual slot overrides — always visible ────────────────────────────────
+    st.markdown("<hr>", unsafe_allow_html=True)
+    _override_player_ids = (
+        [str(row[raw_df.columns[0]]) for _, row in raw_df.iterrows()]
+        if raw_df is not None else []
+    )
+    with st.expander("📌 Manual slot overrides", expanded=bool(st.session_state["slot_overrides"])):
+        if not _override_player_ids:
+            banner("info", "ℹ Load data using the <b>Data source</b> selector above to enable player pins.")
+        else:
+            st.caption(
+                "Pin one or more players to a specific slot before the solver runs. "
+                "The solver will treat these pins as pre-filled and work around them. "
+                "Leave a day blank to let the solver decide freely."
+            )
+            override_uid = st.selectbox(
+                "Select player to pin",
+                options=["— none —"] + _override_player_ids,
+                key="override_uid_select",
+            )
+            if override_uid != "— none —":
+                st.markdown(f"**Pinning User {override_uid}**")
+                ov_cols = st.columns(len(DAY_CONFIG))
+                for ci, dc in enumerate(DAY_CONFIG):
+                    with ov_cols[ci]:
+                        all_slot_labels = ["(solver decides)"] + [slot_label(s) for s in range(48)]
+                        current_pin = st.session_state["slot_overrides"].get(override_uid, {}).get(dc["day"])
+                        current_idx = (current_pin + 1) if current_pin is not None else 0
+                        sel = st.selectbox(
+                            dc["label"],
+                            options=all_slot_labels,
+                            index=current_idx,
+                            key=f"ov_{override_uid}_{dc['day']}",
+                        )
+                        uid_ovs = st.session_state["slot_overrides"].setdefault(override_uid, {})
+                        if sel == "(solver decides)":
+                            uid_ovs.pop(dc["day"], None)
+                        else:
+                            uid_ovs[dc["day"]] = all_slot_labels.index(sel) - 1
+
+        # Active pins table — shown even when no data loaded (so saved pins are visible)
+        active_overrides = {
+            uid: days for uid, days in st.session_state["slot_overrides"].items() if days
+        }
+        if active_overrides:
+            st.markdown("**Active pins:**")
+            pin_rows = []
+            for uid, days in active_overrides.items():
+                for day, slot in days.items():
+                    dc_label = next((d["label"] for d in DAY_CONFIG if d["day"] == day), f"Day {day}")
+                    pin_rows.append({"User ID": uid, "Day": dc_label, "Pinned slot": slot_label(slot)})
+            st.dataframe(pd.DataFrame(pin_rows), use_container_width=True, hide_index=True)
+            if st.button("🗑 Clear all pins", key="clear_pins"):
+                st.session_state["slot_overrides"] = {}
+                st.rerun()
+
+    if raw_df is not None:
         st.markdown(
             '<div class="section-label" style="margin-top:1rem">Column mapping</div>',
             unsafe_allow_html=True,
@@ -2133,54 +2190,6 @@ elif st.session_state["page"] == "scheduler":
             Any remaining unplaced high-scorers are mathematically unplaceable: their entire
             time window is saturated by even-higher-scorers with no alternative slots.
         """)
-
-        # ── Manual slot overrides ─────────────────────────────────────────────
-        with st.expander("📌 Manual slot overrides", expanded=bool(st.session_state["slot_overrides"])):
-            st.caption(
-                "Pin one or more players to a specific slot before the solver runs. "
-                "The solver will treat these pins as pre-filled and work around them. "
-                "Leave a day blank to let the solver decide freely."
-            )
-            override_uid = st.selectbox(
-                "Select player to pin",
-                options=["— none —"] + [str(row[id_col]) for _, row in raw_df.iterrows()],
-                key="override_uid_select",
-            )
-            if override_uid != "— none —":
-                st.markdown(f"**Pinning User {override_uid}**")
-                ov_cols = st.columns(len(DAY_CONFIG))
-                for ci, dc in enumerate(DAY_CONFIG):
-                    with ov_cols[ci]:
-                        all_slot_labels = ["(solver decides)"] + [slot_label(s) for s in range(48)]
-                        current_pin = st.session_state["slot_overrides"].get(override_uid, {}).get(dc["day"])
-                        current_idx = (current_pin + 1) if current_pin is not None else 0
-                        sel = st.selectbox(
-                            dc["label"],
-                            options=all_slot_labels,
-                            index=current_idx,
-                            key=f"ov_{override_uid}_{dc['day']}",
-                        )
-                        uid_ovs = st.session_state["slot_overrides"].setdefault(override_uid, {})
-                        if sel == "(solver decides)":
-                            uid_ovs.pop(dc["day"], None)
-                        else:
-                            uid_ovs[dc["day"]] = all_slot_labels.index(sel) - 1
-
-            # Show and clear existing pins
-            active_overrides = {
-                uid: days for uid, days in st.session_state["slot_overrides"].items() if days
-            }
-            if active_overrides:
-                st.markdown("**Active pins:**")
-                pin_rows = []
-                for uid, days in active_overrides.items():
-                    for day, slot in days.items():
-                        dc_label = next((d["label"] for d in DAY_CONFIG if d["day"] == day), f"Day {day}")
-                        pin_rows.append({"User ID": uid, "Day": dc_label, "Pinned slot": slot_label(slot)})
-                st.dataframe(pd.DataFrame(pin_rows), use_container_width=True, hide_index=True)
-                if st.button("🗑 Clear all pins", key="clear_pins"):
-                    st.session_state["slot_overrides"] = {}
-                    st.rerun()
 
         run_label_input = st.text_input(
             "Run label (optional)",
