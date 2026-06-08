@@ -1748,7 +1748,15 @@ if st.session_state["page"] == "parser":
             uid = rec["User ID"]
             if uid in duplicates:
                 chosen_idx = choice_map.get(uid, 0)
-                records[i] = duplicates[uid][chosen_idx]
+                chosen_rec = duplicates[uid][chosen_idx]
+                
+                records[i] = chosen_rec
+
+                st.session_state["corrections"][uid] = {
+                    f: chosen_rec[f]
+                    for f in DISPLAY_FIELDS
+                    if f != "User ID"
+                }
 
     for mrec in st.session_state["manual_records"]:
         uid = mrec["User ID"]
@@ -2176,7 +2184,7 @@ elif st.session_state["page"] == "scheduler":
             shards_col = pick("FC Shards column",    "FC Shards")
         with c3:
             time_default = next(
-                (c for c in ("Time", "Hours") if c in cols), cols[0]
+                (c for c in ("Time", "Hours", "Time UTC") if c in cols), cols[0]
             )
             time_col = pick("Time UTC / Hours column", time_default)
             days_col = pick("Days column", "Days")
