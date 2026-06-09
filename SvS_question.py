@@ -594,6 +594,29 @@ def stat_row(*cards: str) -> None:
         unsafe_allow_html=True,
     )
 
+
+def render_stepper(steps: list[tuple[str, str]]) -> None:
+    """Render the workflow stepper.
+
+    Args:
+        steps: List of (label, state) tuples where state is 'done', 'active', or 'idle'.
+    """
+    parts = []
+    for i, (label, state) in enumerate(steps):
+        if i:
+            parts.append('<span class="step-arrow">&#8250;</span>')
+        parts.append(
+            f'<div class="step">'
+            f'<div class="step-circle {state}">{i + 1}</div>'
+            f'<span class="step-label {state}">{label}</span>'
+            f'</div>'
+        )
+    st.markdown(
+        f'<div class="stepper">{"".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PARSER HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1465,8 +1488,15 @@ with nav_col2:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if st.session_state["page"] == "parser":
+
     has_data = st.session_state["parsed_df"] is not None
-    
+    render_stepper([
+        ("Paste player data",  "active"),
+        ("Review & correct",   "active"),
+        ("Send to Scheduler",  "done" if has_data else "idle"),
+        ("Run &amp; export",   "idle"),
+    ])
+
     with st.expander("How to use this tool", expanded=(not has_data)):
         st.markdown("""
         <div class="guide-grid">
