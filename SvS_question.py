@@ -91,7 +91,7 @@ st.markdown("""
     .block-container {
         padding-top: 1.5rem !important;
         padding-bottom: 4rem !important;
-        max-width: 1100px !important;
+        max-width: 1200px !important;
     }
 
     /* ── SECTION LABEL ───────────────────────────────────────── */
@@ -126,7 +126,7 @@ st.markdown("""
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-bottom: 2.5rem;
+        margin-bottom: 1rem;
         box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5);
     }
     .topnav-brand {
@@ -463,6 +463,36 @@ st.markdown("""
         max-width: 400px; margin: 0 auto; line-height: 1.6;
     }
 
+    /* ── TOPNAV INNER LAYOUT ─────────────────────────────────── */
+    .topnav-inner {
+        display: flex; width: 100%;
+        align-items: center; justify-content: space-between;
+    }
+    .topnav-text { display: flex; flex-direction: column; gap: 0.1rem; }
+    .topnav-tagline {
+        font-family: 'Inter', sans-serif;
+        font-size: 0.65rem; font-weight: 500;
+        color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .topnav-meta {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.7rem; color: var(--text-dim); font-weight: 500;
+    }
+    .topnav-sep { width: 1px; height: 16px; background: var(--border); }
+
+    /* ── FC RAW LINE ─────────────────────────────────────────── */
+    .fc-raw {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.75rem; color: var(--text-muted);
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--border); border-radius: var(--radius-sm);
+        padding: 0.4rem 0.75rem; margin: 0.25rem 0 0.75rem;
+    }
+    .fc-raw span { color: var(--primary); }
+
+    /* ── STEP ARROW (hidden — connector is drawn by CSS ::after) */
+    .step-arrow { display: none; }
+
     /* ── SCROLLBAR ───────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -603,12 +633,10 @@ def render_stepper(steps: list[tuple[str, str]]) -> None:
     """
     parts = []
     for i, (label, state) in enumerate(steps):
-        if i:
-            parts.append('<span class="step-arrow">&#8250;</span>')
         parts.append(
-            f'<div class="step">'
-            f'<div class="step-circle {state}">{i + 1}</div>'
-            f'<span class="step-label {state}">{label}</span>'
+            f'<div class="step {state}">'
+            f'<div class="step-circle">{i + 1}</div>'
+            f'<span class="step-label">{label}</span>'
             f'</div>'
         )
     st.markdown(
@@ -1482,6 +1510,8 @@ with nav_col2:
         st.session_state["page"] = "scheduler"
         st.rerun()
 
+st.markdown("<div style='margin-bottom:1.5rem'></div>", unsafe_allow_html=True)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — PARSER
@@ -1544,7 +1574,7 @@ if st.session_state["page"] == "parser":
           <tr><td>Days</td><td>Which SvS days the player joins</td>
               <td><code>1, 2, 4</code>, <code>Mon, Thu</code>, <code>Monday</code></td></tr>
         </table>
-        <div style="font-size:0.73rem;color:#3a4558;margin-top:0.6rem;">
+        <div style="font-size:0.73rem;color:var(--text-dim);margin-top:0.6rem;">
           Days: 1 = Construction &nbsp;·&nbsp; 2 = Research &nbsp;·&nbsp; 4 = Troops
         </div>
         """, unsafe_allow_html=True)
@@ -1795,7 +1825,7 @@ if st.session_state["page"] == "parser":
         all_uids       = [r["User ID"] for r in all_records]
         manual_uid_set = {r["User ID"] for r in st.session_state["manual_records"]}
 
-        col_del, col_clear = st.columns([3, 1])
+        col_del, col_clear = st.columns([3, 1], vertical_alignment="bottom")
         with col_del:
             to_exclude = st.multiselect(
                 "Exclude from results and export",
@@ -1805,7 +1835,6 @@ if st.session_state["page"] == "parser":
             )
             st.session_state["excluded_ids"] = set(to_exclude)
         with col_clear:
-            st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Clear all manual", use_container_width=True):
                 manual_ids = {r["User ID"] for r in st.session_state["manual_records"]}
                 st.session_state["manual_records"] = []
@@ -2072,11 +2101,11 @@ elif st.session_state["page"] == "scheduler":
             lvl_col = pick("Level column",        "Level")
             fcs_col = pick("FCs column",          "FCs")
         with c2:
-            con_col    = pick("Construction column", "Construction")
-            res_col    = pick("Research column",     "Research")
-            trp_col    = pick("Troops column",       "Troops")
-            shards_col = pick("FC Shards column",    "FC Shards")
+            con_col = pick("Construction column", "Construction")
+            res_col = pick("Research column",     "Research")
+            trp_col = pick("Troops column",       "Troops")
         with c3:
+            shards_col = pick("FC Shards column",    "FC Shards")
             time_default = next(
                 (c for c in ("Time", "Hours", "Time UTC") if c in cols), cols[0]
             )
@@ -2099,7 +2128,7 @@ elif st.session_state["page"] == "scheduler":
             key="run_label_input",
         )
 
-        if st.button("⚡ Run scheduler", type="primary", use_container_width=False):
+        if st.button("⚡ Run scheduler", type="primary", use_container_width=True):
             def _safe_int(row, col_name):
                 """Safely coerce a DataFrame cell to int, returning None on failure."""
                 val = row[col_name]
