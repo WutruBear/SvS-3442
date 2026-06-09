@@ -1465,6 +1465,8 @@ with nav_col2:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if st.session_state["page"] == "parser":
+    has_data = st.session_state["parsed_df"] is not None
+    
     with st.expander("How to use this tool", expanded=(not has_data)):
         st.markdown("""
         <div class="guide-grid">
