@@ -966,6 +966,98 @@ def parse_input(text: str) -> tuple[list, list, dict]:
 
     return records, warnings, duplicates
 
+def parse_dataframe(df: pd.DataFrame, mapping: dict) -> tuple[list, list, dict]:
+    """Parse a pandas DataFrame row by row using the existing normalization functions."""
+    all_parsed: list = []
+    warnings:   list = []
+
+    for i, row in df.iterrows():
+        rec = {}
+        
+        # User ID
+        uid_raw = str(row.get(mapping.get("User ID", ""), "")).strip()
+        if uid_raw and uid_raw.lower() != "nan":
+            m = re.search(r'(\d+)', uid_raw)
+            if m:
+                rec["User ID"] = m.group(1)
+            else:
+                warnings.append(f"Row {i+2}: Could not extract User ID from '{uid_raw}' — skipped.")
+                continue
+        else:
+            warnings.append(f"Row {i+2}: Missing User ID — skipped.")
+            continue
+
+        # Level
+        lvl_raw = str(row.get(mapping.get("Level", ""), "")).strip()
+        if lvl_raw and lvl_raw.lower() != "nan":
+            m = re.search(r'(\S+)', lvl_raw)
+            rec["Level"] = m.group(1) if m else ""
+        else:
+            rec["Level"] = ""
+        rec["_conf_Level"] = HIGH if rec["Level"] else LOW
+
+        # Speedups
+        for field in ["Construction", "Research", "Troops"]:
+            val_raw = str(row.get(mapping.get(field, ""), "")).strip()
+            if val_raw.lower() == "nan": val_raw = ""
+            v, c = normalize_duration(val_raw)
+            rec[field] = v
+            rec[f"_conf_{field}"] = c
+
+        # FCs and Shards
+        fc_raw = str(row.get(mapping.get("FCs", ""), "")).strip()
+        sh_raw = str(row.get(mapping.get("FC Shards", ""), "")).strip()
+        if fc_raw.lower() == "nan": fc_raw = ""
+        if sh_raw.lower() == "nan": sh_raw = ""
+        
+        # Combine them to feed into the existing regex parser
+        combined_fc = f"FC {fc_raw} shards {sh_raw}"
+        fc_v, fc_c, sh_v, sh_c = parse_fc_shards(combined_fc)
+        
+        # Fallback if parse_fc_shards fails on isolated pure numbers
+        if not fc_v and fc_raw.replace(".", "").replace(",", "").isdigit():
+            fc_v, fc_c = int(float(_parse_number_str(fc_raw))), HIGH
+        if not sh_v and sh_raw.replace(".", "").replace(",", "").isdigit():
+            sh_v, sh_c = int(float(_parse_number_str(sh_raw))), HIGH
+
+        rec["FCs"] = fc_v; rec["_conf_FCs"] = fc_c
+        rec["FC Shards"] = sh_v; rec["_conf_FC Shards"] = sh_c
+        rec["_fc_raw"] = combined_fc
+
+        # Time UTC
+        time_raw = str(row.get(mapping.get("Time UTC", ""), "")).strip()
+        if time_raw.lower() == "nan": time_raw = ""
+        tv, tc, slot_count = normalize_time_utc(time_raw)
+        rec["Time UTC"] = tv
+        if tv and slot_count < MIN_TIME_WINDOW_SLOTS:
+            rec["_conf_Time UTC"] = MEDIUM
+            rec["_warn_Time UTC"] = f"Only {slot_count / 2:.4g}h window — minimum is 3h"
+        else:
+            rec["_conf_Time UTC"] = tc
+
+        # Days
+        days_raw = str(row.get(mapping.get("Days", ""), "")).strip()
+        if days_raw.lower() == "nan": days_raw = ""
+        dv, dc = normalize_days(days_raw)
+        rec["Days"] = dv
+        rec["_conf_Days"] = dc
+
+        # Metadata
+        rec["_raw_block"] = f"Imported from CSV Row {i+2}"
+        rec["_manual"] = False
+        
+        all_parsed.append(rec)
+
+    # Deduplicate identically to parse_input
+    by_uid: dict = {}
+    for rec in all_parsed:
+        by_uid.setdefault(rec["User ID"], []).append(rec)
+
+    duplicates = {uid: recs for uid, recs in by_uid.items() if len(recs) > 1}
+    records = [recs[0] for recs in by_uid.values()]
+
+    return records, warnings, duplicates
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EXCEL BUILDER (Parser export)
@@ -1583,41 +1675,81 @@ if st.session_state["page"] == "parser":
 
     col_input, col_tools = st.columns([4, 1])
 
-    def _save_to_browser():
-        local_storage.setItem("svs_raw_input", st.session_state["raw_input"])
+    st.markdown('<div class="section-label">Input Source</div>', unsafe_allow_html=True)
+    input_mode = st.radio("Mode", ["Raw Text Paste", "Spreadsheet Upload"], horizontal=True, label_visibility="collapsed")
+    st.markdown("<div style='margin-bottom:1rem'></div>", unsafe_allow_html=True)
 
-    with col_input:
-        st.markdown('<div class="section-label">Raw Input</div>', unsafe_allow_html=True)
-        raw_text = st.text_area(
-            "raw",
-            height=340,
-            label_visibility="collapsed",
-            key="raw_input",
-            on_change=_save_to_browser,
-        )
+    records, parse_warnings, duplicates = [], [], {}
+    input_hash = 0
 
-    with col_tools:
-        st.markdown('<div class="section-label">Input File</div>', unsafe_allow_html=True)
-        uploaded = st.file_uploader("Load .txt", type=["txt"], label_visibility="collapsed",
-                                    accept_multiple_files=True)
-        if uploaded:
-            merged = "\n".join(f.read().decode("utf-8") for f in uploaded)
-            st.session_state["raw_input"] = merged
-            st.rerun()
-        st.download_button(
-            "💾 Save raw input",
-            data=st.session_state["raw_input"].encode("utf-8"),
-            file_name="svs_input.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
+    if input_mode == "Raw Text Paste":
+        col_input, col_tools = st.columns([4, 1])
 
-    if not raw_text.strip():
-        st.info("Paste your player data in the text box above.")
-        st.stop()
+        def _save_to_browser():
+            local_storage.setItem("svs_raw_input", st.session_state["raw_input"])
 
-    records, parse_warnings, duplicates = parse_input(raw_text)
-    input_hash = hash(raw_text)
+        with col_input:
+            raw_text = st.text_area(
+                "raw",
+                height=340,
+                label_visibility="collapsed",
+                key="raw_input",
+                on_change=_save_to_browser,
+            )
+
+        with col_tools:
+            uploaded = st.file_uploader("Load .txt", type=["txt"], label_visibility="collapsed", accept_multiple_files=True)
+            if uploaded:
+                merged = "\n".join(f.read().decode("utf-8") for f in uploaded)
+                st.session_state["raw_input"] = merged
+                st.rerun()
+            st.download_button(
+                "💾 Save raw input",
+                data=st.session_state["raw_input"].encode("utf-8"),
+                file_name="svs_input.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+
+        if not raw_text.strip():
+            st.info("Paste your player data in the text box above.")
+            st.stop()
+
+        records, parse_warnings, duplicates = parse_input(raw_text)
+        input_hash = hash(raw_text)
+
+    else:
+        # Spreadsheet Upload Mode
+        uploaded_df = st.file_uploader("Upload CSV / Excel file", type=["csv", "xlsx"])
+        if not uploaded_df:
+            st.info("Upload a spreadsheet containing raw player responses to begin.")
+            st.stop()
+            
+        df_in = pd.read_csv(uploaded_df) if uploaded_df.name.endswith(".csv") else pd.read_excel(uploaded_df)
+        cols = ["— none —"] + df_in.columns.tolist()
+        
+        st.markdown('<div class="section-label" style="margin-top:1rem">Map Columns</div>', unsafe_allow_html=True)
+        def pick(label: str, match: str) -> str:
+            best = next((c for c in cols if match.lower() in c.lower()), "— none —")
+            return st.selectbox(label, cols, index=cols.index(best) if best in cols else 0)
+
+        c1, c2, c3 = st.columns(3)
+        mapping = {}
+        with c1:
+            mapping["User ID"] = pick("User ID *", "id")
+            mapping["Level"]   = pick("Level", "level")
+            mapping["FCs"]     = pick("FCs", "fc")
+        with c2:
+            mapping["Construction"] = pick("Construction", "const")
+            mapping["Research"]     = pick("Research", "res")
+            mapping["Troops"]       = pick("Troops", "troop")
+        with c3:
+            mapping["FC Shards"] = pick("FC Shards", "shard")
+            mapping["Time UTC"]  = pick("Time UTC", "time")
+            mapping["Days"]      = pick("Days", "day")
+            
+        records, parse_warnings, duplicates = parse_dataframe(df_in, mapping)
+        input_hash = hash(uploaded_df.getvalue()) + hash(str(mapping))
 
     # ── Reset corrections when input changes ──────────────────────────────────
     if st.session_state["_last_hash"] != input_hash:
