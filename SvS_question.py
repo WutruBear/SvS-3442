@@ -875,7 +875,7 @@ _SPEEDUP_FIELDS: list[tuple[str, list]] = [
 ]
 
 _FC_PATS = [
-    r'(?:How many FCs[^:\n]*|FC[s]?\s*/\s*[Ss]hard[s]?[^:\n]*)\s*[:\-]?\s*([^\n]+)',
+    r'(?:How many FCs[^:?\n]*|FC[s]?\s*/\s*[Ss]hard[s]?[^:?\n]*)\s*[:?\-]?\s*([^\n]+)',
     r'FC[s]?\s+and[^:\n]*[:\-]?\s*([^\n]+)',
     r'(?:Crystal[s]?[^:\n]*)\s*[:\-]?\s*([^\n]+)',
 ]
